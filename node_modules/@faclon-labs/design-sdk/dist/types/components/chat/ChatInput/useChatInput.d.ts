@@ -1,0 +1,24 @@
+import React from 'react';
+import type { ChatInputProps, ChatInputFile, ChatInputFileList } from './types';
+type UseChatInputOptions = Pick<ChatInputProps, 'value' | 'defaultValue' | 'onChange' | 'onSubmit' | 'isDisabled' | 'isGenerating' | 'onStop' | 'accept' | 'onFileChange' | 'suggestions' | 'onSuggestionAccept'>;
+type UseChatInputReturn = {
+    textValue: string;
+    files: ChatInputFileList;
+    activeSuggestionIndex: number;
+    hasText: boolean;
+    hasFiles: boolean;
+    isSubmitDisabled: boolean;
+    showGhostSuggestion: boolean;
+    textareaRef: React.RefObject<HTMLTextAreaElement>;
+    fileInputRef: React.RefObject<HTMLInputElement>;
+    handleTextChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+    handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+    handlePaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
+    handleSubmit: () => void;
+    handleUploadClick: () => void;
+    handleFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    handleFileRemove: (file: ChatInputFile) => void;
+    handleInnerMouseDownCapture: (e: React.MouseEvent) => void;
+};
+declare function useChatInput({ value: controlledValue, defaultValue, onChange, onSubmit, isDisabled, accept, onFileChange, suggestions, onSuggestionAccept, }: UseChatInputOptions, forwardedRef: React.ForwardedRef<HTMLTextAreaElement>): UseChatInputReturn;
+export { useChatInput };

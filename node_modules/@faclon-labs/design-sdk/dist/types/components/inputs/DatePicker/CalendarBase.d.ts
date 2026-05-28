@@ -1,0 +1,51 @@
+import type { HTMLAttributes } from 'react';
+import { type DayCellType } from './CalendarDayCell';
+import './CalendarBase.css';
+export type CalendarView = 'date' | 'month' | 'year';
+export interface CalendarDay {
+    date: number;
+    type?: DayCellType;
+    isSelected?: boolean;
+    isCurrentDate?: boolean;
+}
+export interface CalendarMonthYear {
+    label: string;
+    value: string | number;
+    isSelected?: boolean;
+}
+export interface CalendarBaseProps extends HTMLAttributes<HTMLDivElement> {
+    /** Current view mode */
+    view?: CalendarView;
+    /** Header label ("March 2026", "2026", "2020 - 2031") */
+    headerLabel?: string;
+    /** Called when prev button clicked */
+    onPrev?: () => void;
+    /** Called when next button clicked */
+    onNext?: () => void;
+    /** Called when header label clicked (to switch view) */
+    onHeaderClick?: () => void;
+    /** Day grid — for 'date' view (6 rows × 7 cols) */
+    days?: CalendarDay[][];
+    /** Called when a day is clicked */
+    onDayClick?: (day: CalendarDay) => void;
+    /** Called when the pointer enters a day cell (for range hover preview) */
+    onDayHover?: (day: CalendarDay) => void;
+    /** Called when the pointer leaves the day grid */
+    onDayHoverEnd?: () => void;
+    /** Month/year items — for 'month'/'year' views (4 rows × 3 cols) */
+    items?: CalendarMonthYear[][];
+    /** Called when a month/year item is clicked */
+    onItemClick?: (item: CalendarMonthYear) => void;
+    /** Whether to show the footer */
+    showFooter?: boolean;
+    /** Disable the Apply button */
+    isApplyDisabled?: boolean;
+    /** Called when Cancel clicked */
+    onCancel?: () => void;
+    /** Called when Apply clicked */
+    onApply?: () => void;
+}
+export declare function CalendarBase({ view, headerLabel, onPrev, onNext, onHeaderClick, days, onDayClick, onDayHover, onDayHoverEnd, items, onItemClick, showFooter, isApplyDisabled, onCancel, onApply, className, ...props }: CalendarBaseProps): import("react/jsx-runtime").JSX.Element;
+export declare namespace CalendarBase {
+    var displayName: string;
+}

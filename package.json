@@ -1,0 +1,36 @@
+{
+  "name": "iosense-combinerbarlinechart-widget",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "webpack serve --mode development",
+    "build:bundle": "webpack --mode production",
+    "deploy:review": "node scripts/pre-deploy-review.js",
+    "deploy": "claude /deploy-review"
+  },
+  "dependencies": {
+    "@faclon-labs/design-sdk": "latest",
+    "highcharts": "12.5.0",
+    "highcharts-react-official": "^3.2.3",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-feather": "^2.0.10"
+  },
+  "devDependencies": {
+    "@babel/core": "^7",
+    "@babel/preset-env": "^7",
+    "@babel/preset-react": "^7",
+    "@babel/preset-typescript": "^7",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "babel-loader": "^9",
+    "css-loader": "^6",
+    "mini-css-extract-plugin": "^2",
+    "style-loader": "^3",
+    "typescript": "^5",
+    "webpack": "^5",
+    "webpack-cli": "^4",
+    "webpack-dev-server": "^4"
+  }
+}

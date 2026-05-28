@@ -1,0 +1,17 @@
+import type { HTMLAttributes, ReactNode } from 'react';
+import './CardLeadingItem.css';
+export type CardLeadingType = 'None' | 'Icon' | 'Custom';
+export interface CardLeadingItemProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
+    /** Type of leading item */
+    leading?: CardLeadingType;
+    /**
+     * Content slot.
+     * - leading='Icon' → pass a 24px icon element (constrained to 24×24)
+     * - leading='Custom' → pass any ReactNode (flexible size)
+     */
+    children?: ReactNode;
+}
+export declare function CardLeadingItem({ leading, children, className, ...rest }: CardLeadingItemProps): import("react/jsx-runtime").JSX.Element | null;
+export declare namespace CardLeadingItem {
+    var displayName: string;
+}

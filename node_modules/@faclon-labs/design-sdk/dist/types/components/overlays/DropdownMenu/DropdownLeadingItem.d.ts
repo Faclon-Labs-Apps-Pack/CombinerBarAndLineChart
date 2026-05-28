@@ -1,0 +1,17 @@
+import type { HTMLAttributes, ReactNode } from 'react';
+import './DropdownLeadingItem.css';
+export type DropdownLeadingType = 'Icon' | 'Asset';
+export interface DropdownLeadingItemProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
+    /** Type of leading item */
+    leading?: DropdownLeadingType;
+    /**
+     * Content slot.
+     * - leading='Icon' → pass a 20px icon element (constrained to 20×20)
+     * - leading='Asset' → pass any ReactNode (constrained to 32×32)
+     */
+    children?: ReactNode;
+}
+export declare function DropdownLeadingItem({ leading, children, className, ...rest }: DropdownLeadingItemProps): import("react/jsx-runtime").JSX.Element | null;
+export declare namespace DropdownLeadingItem {
+    var displayName: string;
+}

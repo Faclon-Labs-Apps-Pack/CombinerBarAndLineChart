@@ -1,0 +1,32 @@
+import { type HTMLAttributes } from 'react';
+import { type ColorConfigMode } from './ColorConfig';
+import './ColorPickerPanel.css';
+export interface ColorPickerPanelProps extends HTMLAttributes<HTMLDivElement> {
+    /** Current hue (0–360) */
+    hue?: number;
+    /** Current saturation (0–100) */
+    saturation?: number;
+    /** Current brightness (0–100) */
+    brightness?: number;
+    /** Current opacity (0–100) */
+    opacity?: number;
+    /** RGB values */
+    r?: number;
+    g?: number;
+    b?: number;
+    /** HEX value */
+    hex?: string;
+    /** Config mode (Hex/RGB) */
+    configMode?: ColorConfigMode;
+    /** Called when color changes via canvas/sliders */
+    onHueChange?: (hue: number) => void;
+    onSaturationBrightnessChange?: (s: number, b: number) => void;
+    onOpacityChange?: (opacity: number) => void;
+    onRgbChange?: (r: number, g: number, b: number) => void;
+    onHexChange?: (hex: string) => void;
+    onConfigModeChange?: (mode: ColorConfigMode) => void;
+}
+export declare function ColorPickerPanel({ hue, saturation, brightness, opacity, r, g, b, hex, configMode, onHueChange, onSaturationBrightnessChange, onOpacityChange, onRgbChange, onHexChange, onConfigModeChange, className, ...props }: ColorPickerPanelProps): import("react/jsx-runtime").JSX.Element;
+export declare namespace ColorPickerPanel {
+    var displayName: string;
+}

@@ -1,0 +1,19 @@
+import { type HTMLAttributes } from 'react';
+import './DatePresetSidebar.css';
+export interface DatePresetOption {
+    label: string;
+    value: string;
+}
+export interface DatePresetSidebarProps extends HTMLAttributes<HTMLDivElement> {
+    /** Preset options to display */
+    presets?: DatePresetOption[];
+    /** Currently selected preset value */
+    selectedValue?: string;
+    /** Called when a preset is clicked */
+    onPresetSelect?: (value: string) => void;
+}
+export declare const DEFAULT_PRESETS: DatePresetOption[];
+export declare function DatePresetSidebar({ presets, selectedValue, onPresetSelect, className, ...props }: DatePresetSidebarProps): import("react/jsx-runtime").JSX.Element;
+export declare namespace DatePresetSidebar {
+    var displayName: string;
+}
