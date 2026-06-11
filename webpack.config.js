@@ -6,8 +6,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const COMPONENTS = {
-  ColumnChart: './src/components/ColumnChart/index.ts',
-  ColumnChartConfiguration: './src/components/ColumnChartConfiguration/index.ts',
+  CombinedBarLineChart: './src/components/CombinerBarLineChart/index.ts',
+  CombinedBarLineChartConfiguration: './src/components/CombinerBarLineChartConfiguration/index.ts',
 };
 
 export default (env, argv) => {
@@ -24,6 +24,15 @@ export default (env, argv) => {
     },
     externals: isProd
       ? {
+          // These are NOT bundled — the host (I/O-Lens / Angular shell) must
+          // expose them as globals on `window` BEFORE the widget bundle runs:
+          //   window.React, window.ReactDOM, window.ReactJSXRuntime,
+          //   window.ReactDOMServer, window.Highcharts
+          // If `window.Highcharts` is missing, the design-sdk chart code reads
+          // `Highcharts.AST` on undefined → "Cannot read properties of
+          // undefined (reading 'AST')". The Highcharts version must be v12.x to
+          // match @faclon-labs/design-sdk. The exporting/export-data modules are
+          // bundled with the widget and self-attach to window.Highcharts.
           react: 'React',
           'react-dom': 'ReactDOM',
           'react-dom/client': 'ReactDOM',
@@ -34,9 +43,25 @@ export default (env, argv) => {
           apexcharts: 'ApexCharts',
         }
       : {},
-    resolve: { extensions: ['.tsx', '.ts', '.js'] },
+    // Safety net: if any code path imports the ESM Highcharts entry, route it to
+    // the same bare `highcharts` specifier so it resolves to the single external
+    // global instead of bundling a second, separate Highcharts instance.
+    resolve: {
+      extensions: ['.tsx', '.ts', '.js'],
+      alias: isProd
+        ? {
+            'highcharts/esm/highcharts.js': 'highcharts',
+            'highcharts/esm/highcharts': 'highcharts',
+          }
+        : {},
+    },
     module: {
       rules: [
+        {
+          test: /\.m?js$/,
+          include: /node_modules/,
+          resolve: { fullySpecified: false },
+        },
         {
           test: /\.(ts|tsx)$/,
           exclude: /node_modules/,
@@ -71,7 +96,8 @@ export default (env, argv) => {
     ...(!isProd && {
       devServer: {
         static: path.resolve(__dirname, 'public'),
-        port: 3003,
+        host: '127.0.0.1',
+        port: 3004,
         hot: true,
         open: false,
         historyApiFallback: true,

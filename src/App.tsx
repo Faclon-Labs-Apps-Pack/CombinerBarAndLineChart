@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { ColumnChart } from './components/CombinerBarLineChart/CombinerBarLineChart';
-import { ColumnChartConfiguration } from './components/CombinerBarLineChartConfiguration/CombinerBarLineChartConfiguration';
+import { CombinedBarLineChart } from './components/CombinerBarLineChart/CombinerBarLineChart';
+import { CombinedBarLineChartConfiguration } from './components/CombinerBarLineChartConfiguration/CombinerBarLineChartConfiguration';
 import { ColumnChartEnvelope, DataEntry, WidgetEvent } from './iosense-sdk/types';
 import { validateSSOToken } from './iosense-sdk/api';
 import { resolve } from './iosense-sdk/mini-engine';
@@ -12,6 +12,7 @@ export default function App() {
   const [data, setData] = useState<DataEntry[]>([]);
   const [auth, setAuth] = useState<string>(localStorage.getItem('bearer_token') ?? '');
   const [timeOverride, setTimeOverride] = useState<{ startTime: number; endTime: number; periodicity?: string } | undefined>(undefined);
+  const widgetSize = envelope?.uiConfig.style.widgetSize ?? { width: 880, height: 400 };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -54,11 +55,14 @@ export default function App() {
   return (
     <div className="app">
       <div className="app__config">
-        <ColumnChartConfiguration config={envelope} authentication={auth} onChange={setEnvelope} />
+        <CombinedBarLineChartConfiguration config={envelope} authentication={auth} onChange={setEnvelope} />
       </div>
-      <div className="app__widget">
+      <div
+        className="app__widget"
+        style={envelope ? { flex: '0 0 auto', width: widgetSize.width, height: widgetSize.height } : undefined}
+      >
         {envelope ? (
-          <ColumnChart config={envelope.uiConfig} data={data} onEvent={handleEvent} />
+          <CombinedBarLineChart config={envelope.uiConfig} data={data} onEvent={handleEvent} timeConfig={envelope.timeConfig} />
         ) : (
           <div className="app__empty">
             <p className="BodyMediumRegular">Configure the widget in the left panel to preview it here.</p>

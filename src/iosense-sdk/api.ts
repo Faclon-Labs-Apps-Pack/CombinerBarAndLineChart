@@ -1,11 +1,7 @@
-import { BindingEntry, SeriesPayload, SeriesMeta, SeriesSlot } from './types';
+import { BindingEntry, DataEntry } from './types';
 
 const STAGING_BASE = 'https://stagingsv.iosense.io/api';
 const GRAPH = 'iosense_test_uns';
-
-function isRawSeriesItem(item: Record<string, unknown>): boolean {
-  return Array.isArray(item.slots);
-}
 
 export async function validateSSOToken(ssoToken: string): Promise<string> {
   const res = await fetch(`${STAGING_BASE}/account/validateSSO`, {
@@ -23,65 +19,23 @@ export async function resolveAndCompute(
   startTime: number,
   endTime: number,
   timeFrame?: string,
-): Promise<Array<{ key: string; value: string | number | null | SeriesPayload }>> {
+): Promise<DataEntry[]> {
   const body: Record<string, unknown> = { graph: GRAPH, config, startTime, endTime };
   if (timeFrame) body.timeFrame = timeFrame;
-
-  console.log('[API] Calling resolveAndCompute with:', { endpoint: `${STAGING_BASE}/account/uns/resolveAndCompute`, auth: !!authentication, configCount: config.length });
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-    const res = await fetch(`${STAGING_BASE}/account/uns/resolveAndCompute`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authentication}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      console.error(`[API] resolveAndCompute failed with status ${res.status}:`, errorText);
-      throw new Error(`API error: ${res.status} - ${errorText}`);
-    }
-
-    const json = await res.json();
-    console.log('[API] resolveAndCompute response:', json);
-
-    if (!json.success) {
-      console.error('[API] resolveAndCompute returned success=false:', json);
-    }
-
-    const rawItems: Record<string, unknown>[] = json?.data ?? [];
-    return rawItems.map((item) => {
-      if (isRawSeriesItem(item)) {
-        return {
-          key: item.key as string,
-          value: {
-            __type: 'series' as const,
-            path: item.path as string,
-            meta: item.meta as SeriesMeta,
-            range: item.range as { from: number; to: number },
-            slots: item.slots as SeriesSlot[],
-          } satisfies SeriesPayload,
-        };
-      }
-      return { key: item.key as string, value: item.value as string | number | null };
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error('[API] resolveAndCompute timeout after 30 seconds');
-      throw new Error('API request timeout');
-    }
-    console.error('[API] resolveAndCompute fetch error:', error);
-    throw error;
-  }
+  const res = await fetch(`${STAGING_BASE}/account/uns/resolveAndCompute`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${authentication}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  // Pass the API items through AS-IS — no reshaping. This mirrors what the
+  // production Lens Data Engine hands the widget (series fields at the top
+  // level of each item, scalars as { key, value }). The widget's
+  // getSeriesData()/getValue() read this raw shape directly.
+  return (json?.data ?? []) as DataEntry[];
 }
 
 export async function fetchUNSNodes(
@@ -94,38 +48,11 @@ export async function fetchUNSNodes(
   const params = new URLSearchParams({ graph, limit: String(limit) });
   if (label) params.set('label', label);
   if (expandPostfix) params.set('expandPostfix', 'true');
-
-  console.log('[API] Calling fetchUNSNodes:', { endpoint: `${STAGING_BASE}/account/uns/nodes`, graph, label, auth: !!authentication });
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-    const res = await fetch(`${STAGING_BASE}/account/uns/nodes?${params}`, {
-      headers: { Authorization: `Bearer ${authentication}` },
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      console.error(`[API] fetchUNSNodes failed with status ${res.status}:`, errorText);
-      throw new Error(`API error: ${res.status} - ${errorText}`);
-    }
-
-    const json = await res.json();
-    console.log('[API] fetchUNSNodes response:', json);
-
-    return (json?.data?.data ?? []) as Array<{
-      id: string; type: string; name?: string; path: string | null; parentId: string | null;
-    }>;
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error('[API] fetchUNSNodes timeout after 30 seconds');
-      throw new Error('API request timeout');
-    }
-    console.error('[API] fetchUNSNodes fetch error:', error);
-    throw error;
-  }
+  const res = await fetch(`${STAGING_BASE}/account/uns/nodes?${params}`, {
+    headers: { Authorization: `Bearer ${authentication}` },
+  });
+  const json = await res.json();
+  return (json?.data?.data ?? []) as Array<{
+    id: string; type: string; name?: string; path: string | null; parentId: string | null;
+  }>;
 }

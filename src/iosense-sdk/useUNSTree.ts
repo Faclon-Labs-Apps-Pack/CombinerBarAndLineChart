@@ -149,21 +149,11 @@ export function useUNSTree(authentication?: string): UseUNSTreeResult {
   }, [tick]);
 
   async function loadWorkspaces() {
-    console.log('[UNS] loadWorkspaces called', { hasAuth: !!authentication, alreadyCached: _cache.workspaces !== null });
     // _cache.workspaces === null means not yet fetched; {} means fetched but empty — both are valid.
-    if (!authentication) {
-      console.error('[UNS] loadWorkspaces: no authentication available');
-      return;
-    }
-    if (_cache.workspaces !== null) {
-      console.log('[UNS] loadWorkspaces: workspaces already cached');
-      return;
-    }
+    if (!authentication || _cache.workspaces !== null) return;
     setIsLoadingTree(true);
     try {
-      console.log('[UNS] fetching workspaces...');
       const nodes = await fetchUNSNodes(authentication, 'uns:_workspaces');
-      console.log('[UNS] fetchUNSNodes returned:', nodes.length, 'nodes');
       const wsMap: Record<string, string> = {};
       for (const n of nodes) {
         if (n.type === 'Workspace' && n.name) wsMap[n.name] = n.id;
