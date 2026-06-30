@@ -132,11 +132,46 @@ export async function resolve(
         : { key: binding.key, topic: binding.topic },
     );
 
+    // Comparison mode: resolve the comparison window the widget overlays for the
+    // ▲/▼ deviation. The window is whatever the date picker's Compare panel chose
+    // (Previous period / Same period last year / Custom), passed through
+    // ctx.override; otherwise default to the immediately-preceding equivalent
+    // window (same length, ending where the current window starts). The backend
+    // returns BOTH windows in ONE call — slots (current) + comparisonSlots
+    // (prior) per entry — so we request comparison inline rather than refetching.
+    const comparisonMode = Boolean(envelope.timeConfig?.comparisonMode);
+    let compStart = 0;
+    let compEnd = 0;
+    if (comparisonMode) {
+      const span = Math.max(0, endTime - startTime);
+      const ov = ctx.override;
+      const hasExplicit = ov?.comparisonStartTime != null && ov?.comparisonEndTime != null;
+      compStart = hasExplicit ? ov!.comparisonStartTime! : startTime - span;
+      compEnd   = hasExplicit ? ov!.comparisonEndTime!   : startTime;
+      console.log('[MiniEngine] comparison window', {
+        source: hasExplicit ? 'date-picker Compare panel' : 'default preceding period',
+        window: [new Date(compStart).toLocaleString(), new Date(compEnd).toLocaleString()],
+      });
+    }
+
+    // Comparison and shift are mutually exclusive — comparison wins. When shift
+    // comparison is active (comparison off + shifts configured) the engine sends
+    // the configured `shifts` array verbatim per the SDK contract.
+    const shifts = envelope.timeConfig?.shifts;
+    const extras = comparisonMode
+      ? { comparisonMode: true, comparisonStartTime: compStart, comparisonEndTime: compEnd }
+      : (shifts && shifts.length > 0
+          ? { shifts: shifts as unknown as Array<Record<string, unknown>> }
+          : undefined);
+    if (extras && 'shifts' in extras) {
+      console.log('[MiniEngine] shift comparison — sending shifts verbatim', extras.shifts);
+    }
+
     let items: DataEntry[] = [];
     if (ctx.authentication) {
       try {
         items = await resolveAndCompute(
-          ctx.authentication, bindingsPayload, startTime, endTime, timeFrame,
+          ctx.authentication, bindingsPayload, startTime, endTime, timeFrame, extras,
         );
       } catch {
         items = [];
@@ -147,35 +182,24 @@ export async function resolve(
       items = makeDummyData(bindingsPayload, startTime, endTime, timeFrame, 0, 1);
     }
 
-    // Comparison mode: resolve the comparison window so the widget can overlay
-    // it and compute the ▲/▼ deviation. The window is whatever the date picker's
-    // Compare panel chose (Previous period / Same period last year / Custom),
-    // passed through ctx.override; otherwise default to the immediately-preceding
-    // equivalent window (same length, ending where the current window starts).
+    // Split the prior-period buckets the API returned (entry.comparisonSlots)
+    // into a parallel comparisonData: DataEntry[] the widget overlays. Labels on
+    // comparisonSlots can be blank, so backfill from the same-index current
+    // bucket (equal bucket count) for the tooltip's "vs <date>" footer.
     let comparisonData: DataEntry[] | undefined;
-    if (envelope.timeConfig?.comparisonMode) {
-      const span = Math.max(0, endTime - startTime);
-      const ov = ctx.override;
-      const hasExplicit =
-        ov?.comparisonStartTime != null && ov?.comparisonEndTime != null;
-      const compStart = hasExplicit ? ov!.comparisonStartTime! : startTime - span;
-      const compEnd   = hasExplicit ? ov!.comparisonEndTime!   : startTime;
-      console.log('[MiniEngine] comparison window', {
-        source: hasExplicit ? 'date-picker Compare panel' : 'default preceding period',
-        window: [new Date(compStart).toLocaleString(), new Date(compEnd).toLocaleString()],
-      });
-      if (ctx.authentication) {
-        try {
-          comparisonData = await resolveAndCompute(
-            ctx.authentication, bindingsPayload, compStart, compEnd, timeFrame,
-          );
-        } catch {
-          comparisonData = undefined;
-        }
-      }
-      // Dev fallback: synthesize the comparison window when the backend gave us
-      // nothing OR entries with all-null values — otherwise the comparison
-      // series is empty and the deviation tooltip can't render.
+    if (comparisonMode) {
+      comparisonData = items.map((e) => ({
+        ...e,
+        slots: (e.comparisonSlots ?? []).map((s, i) => ({
+          ...s,
+          label: s.label || e.slots?.[i]?.label || '',
+        })),
+        comparisonSlots: undefined,
+        range: { from: compStart, to: compEnd },
+      }));
+      // Dev fallback: when the live fetch was empty/unauthenticated (so `items`
+      // is synthetic and carried no comparisonSlots) synthesize the comparison
+      // window too, so the deviation tooltip still has something to compute.
       if (MOCK_WHEN_EMPTY && !hasValues(comparisonData)) {
         comparisonData = makeDummyData(bindingsPayload, compStart, compEnd, timeFrame, 0.6, 0.88);
       }

@@ -1,10 +1,23 @@
 import { BindingEntry, DataEntry } from './types';
 
-const STAGING_BASE = 'https://stagingsv.iosense.io/api';
+const API_BASE = 'https://appserver.iosense.io/api';
 const GRAPH = 'iosense_test_uns';
 
+// Optional comparison / shift inputs for resolveAndCompute. Mutually exclusive
+// per the engine contract — comparison wins. When comparison* fields are present
+// the API returns each entry's prior-period buckets as `comparisonSlots`
+// (parallel to `slots`). When `shifts` is present (and comparison is off) the
+// array is sent VERBATIM as a top-level key (id/name/color/startTime/endTime/
+// enabled) — the backend echoes the shift names back in each entry's meta.shifts.
+export interface ResolveExtras {
+  comparisonMode?: boolean;
+  comparisonStartTime?: number;
+  comparisonEndTime?: number;
+  shifts?: Array<Record<string, unknown>>;
+}
+
 export async function validateSSOToken(ssoToken: string): Promise<string> {
-  const res = await fetch(`${STAGING_BASE}/account/validateSSO`, {
+  const res = await fetch(`${API_BASE}/account/validateSSO`, {
     method: 'GET',
     headers: { token: ssoToken },
   });
@@ -19,10 +32,21 @@ export async function resolveAndCompute(
   startTime: number,
   endTime: number,
   timeFrame?: string,
+  extras?: ResolveExtras,
 ): Promise<DataEntry[]> {
   const body: Record<string, unknown> = { graph: GRAPH, config, startTime, endTime };
   if (timeFrame) body.timeFrame = timeFrame;
-  const res = await fetch(`${STAGING_BASE}/account/uns/resolveAndCompute`, {
+  // Comparison and shift are mutually exclusive — comparison wins.
+  if (extras?.comparisonMode && extras.comparisonStartTime != null && extras.comparisonEndTime != null) {
+    // Comparison: one request returns both windows (slots + comparisonSlots).
+    body.comparisonMode = true;
+    body.comparisonStartTime = extras.comparisonStartTime;
+    body.comparisonEndTime = extras.comparisonEndTime;
+  } else if (extras?.shifts && extras.shifts.length > 0) {
+    // Shift comparison: send the configured shifts array verbatim.
+    body.shifts = extras.shifts;
+  }
+  const res = await fetch(`${API_BASE}/account/uns/resolveAndCompute`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -48,7 +72,7 @@ export async function fetchUNSNodes(
   const params = new URLSearchParams({ graph, limit: String(limit) });
   if (label) params.set('label', label);
   if (expandPostfix) params.set('expandPostfix', 'true');
-  const res = await fetch(`${STAGING_BASE}/account/uns/nodes?${params}`, {
+  const res = await fetch(`${API_BASE}/account/uns/nodes?${params}`, {
     headers: { Authorization: `Bearer ${authentication}` },
   });
   const json = await res.json();

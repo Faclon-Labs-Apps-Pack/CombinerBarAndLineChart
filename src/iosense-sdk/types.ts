@@ -56,6 +56,11 @@ export interface DataEntry {
   value?: string | number | null | SeriesPayload;
   // Raw series-item fields (present when value is absent).
   slots?: SeriesSlot[];
+  // Comparison-period buckets, returned alongside `slots` by resolveAndCompute
+  // when the request carries comparisonMode + comparisonStartTime/EndTime. Same
+  // index alignment / bucket count as `slots`. The engine splits these out into
+  // a separate comparisonData: DataEntry[] for the widget's overlay.
+  comparisonSlots?: SeriesSlot[];
   meta?: SeriesMeta;
   range?: { from: number; to: number };
   path?: string;

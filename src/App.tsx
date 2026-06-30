@@ -115,8 +115,8 @@ function makeSeedEnvelope(): ColumnChartEnvelope {
           _id: 'seed_chart_1',
           title: 'Plant Energy',
           series: [
-            { _id: s1, unsPath: '{{uns:ws1://plant/energy}}',     label: 'Energy (kWh)', color: '#2E90FA', chartType: 'Column', yAxis: 0 },
-            { _id: s2, unsPath: '{{uns:ws1://plant/production}}', label: 'Production',    color: '#F79009', chartType: 'Line',   yAxis: 0 },
+            { _id: s1, unsPath: '{{uns:ws_bPmWjpquTp://test:last}}',        label: 'Test (V)',    color: '#2E90FA', chartType: 'Column', yAxis: 0 },
+            { _id: s2, unsPath: '{{uns:ws_bPmWjpquTp://consumption:last}}', label: 'Consumption', color: '#F79009', chartType: 'Line',   yAxis: 0 },
           ],
           fixedSeries: [],
           axes: [{ _id: 'axis_left', name: '', yAxis: 0, seriesIds: [s1, s2] }],
@@ -134,8 +134,8 @@ function makeSeedEnvelope(): ColumnChartEnvelope {
       },
     },
     dynamicBindingPathList: [
-      { key: 'charts[0].series[0].unsPath', topic: 'uns:ws1://plant/energy',     type: 'series' },
-      { key: 'charts[0].series[1].unsPath', topic: 'uns:ws1://plant/production', type: 'series' },
+      { key: 'charts[0].series[0].unsPath', topic: 'uns:ws_bPmWjpquTp://test:last',        type: 'series' },
+      { key: 'charts[0].series[1].unsPath', topic: 'uns:ws_bPmWjpquTp://consumption:last', type: 'series' },
     ],
   };
 }
