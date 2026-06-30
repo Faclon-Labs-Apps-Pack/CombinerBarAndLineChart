@@ -104,12 +104,62 @@ export interface TimeConfig {
   // via resolveDurationWindow (x/xPeriod/xEvent + y/yPeriod/yEvent + navigation).
   fixedDuration?: Duration;
   defaultDurationId: string;
+  // For `global` mode: the durations/defaultDurationId/cycleTime are INHERITED
+  // from the linked Global Time Picker (looked up in the configurator's
+  // `globalTimepickers` prop) and baked in here so the engine can resolve a
+  // fallback window and the widget can display the link. `globalTimepickerId`
+  // identifies which GTP the host must subscribe to for the live window.
+  globalTimepickerId?: string;
+  globalTimepickerName?: string;
   allDurations: Duration[];
   defaultPeriodicity: 'minute' | 'hourly' | 'daily' | 'weekly' | 'monthly';
+  // When true (set in the time tab's "Disable Periodicities" switch) the widget
+  // hides its periodicity dropdown and just uses the default periodicity.
+  disablePeriodicities?: boolean;
+  // Comparison mode (time tab "Comparison Mode" switch). When on, the widget
+  // overlays a comparison period and shows ▲/▼ deviation indicators. The
+  // deviationPattern picks polarity (green-up = positive, or red-up = positive).
+  comparisonMode?: boolean;
+  deviationPattern?: 'green-up-positive' | 'red-up-positive';
+  allowPerSourceIndicator?: boolean;
+  // Shifts configured in the time tab (or inherited from the linked GTP). When
+  // present the date picker shows a "Shift" toggle; the aggregator (default
+  // "max") decides how a bucket spanning multiple shifts is rolled up.
+  shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string }>;
+  shiftAggregator?: string;
+  // Per-source deviation polarity overrides (the "Advanced Settings → Allow a
+  // different comparison indicator for each data source" feature). Keyed by
+  // `${chartId}:${sourceId}`; only honored when allowPerSourceIndicator is on.
+  sourceDeviationOverrides?: Record<string, 'green-up-positive' | 'red-up-positive'>;
+}
+
+// A resolved time window. In `global` mode the host (Lens / dev harness)
+// injects the linked Global Time Picker's CURRENT broadcast window as this
+// shape into the engine ctx, and it flows straight into the resolveAndCompute
+// payload (startTime/endTime/timeFrame).
+export interface TimeWindow {
+  startTime: number;
+  endTime: number;
+  periodicity?: string;
+  // Explicit comparison-period window chosen in the date picker's Compare panel
+  // (Previous period / Same period last year / Custom). When present the engine
+  // uses it verbatim instead of deriving the immediately-preceding window.
+  comparisonStartTime?: number;
+  comparisonEndTime?: number;
 }
 
 export type WidgetEvent =
-  | { type: 'TIME_CHANGE'; payload: { startTime: string; endTime: string; periodicity: string } }
+  | {
+      type: 'TIME_CHANGE';
+      payload: {
+        startTime: string;
+        endTime: string;
+        periodicity: string;
+        // Set only when the date picker's Compare mode is enabled and applied.
+        comparisonStartTime?: string;
+        comparisonEndTime?: string;
+      };
+    }
   | { type: 'FILTER_CHANGE'; payload: Record<string, unknown> };
 
 // ---------------------------------------------------------------------------
@@ -149,6 +199,11 @@ export interface AxisConfig {
   seriesIds: string[];   // _id refs into series[] and fixedSeries[]
 }
 
+// Stable ids for the two supported axes. The default Left axis (yAxis 0) always
+// exists and cannot be deleted; the Right axis (yAxis 1) is optional/deletable.
+export const LEFT_AXIS_ID = 'axis_left';
+export const RIGHT_AXIS_ID = 'axis_right';
+
 export type PlotLinePeriodicity = 'hourly' | 'daily' | 'weekly' | 'monthly';
 
 export interface PlotLineConfig {
@@ -160,6 +215,7 @@ export interface PlotLineConfig {
   dashStyle?: 'Solid' | 'Dash' | 'Dot' | 'DashDot' | 'LongDash' | 'ShortDash';
   periodicityType?: 'independent' | 'dependent';
   periodicities?: PlotLinePeriodicity[];
+  yAxis?: 0 | 1;   // which axis to draw against: 0 = left (default), 1 = right
 }
 
 export interface PlotBandConfig {
@@ -168,6 +224,7 @@ export interface PlotBandConfig {
   to: number | string;
   label: string;
   color: string;
+  yAxis?: 0 | 1;   // which axis to draw against: 0 = left (default), 1 = right
 }
 
 export type WidgetSizePreset = 'Small' | 'Medium' | 'Large' | 'Custom';
@@ -184,6 +241,7 @@ export interface WidgetElementsConfig {
   hideSettingsIcon: boolean;
   hideExportIcon: boolean;
   hideChartTitle: boolean;
+  hideInfoIcon: boolean;
 }
 
 export type WidgetFontWeight = 'Regular' | 'Medium' | 'Semi-Bold' | 'Bold';
@@ -204,6 +262,7 @@ export interface WidgetAdvancedSettingsConfig {
 export interface ChartConfig {
   _id: string;
   title: string;
+  description?: string;
   series: ColumnChartSeriesConfig[];
   fixedSeries: FixedSeriesConfig[];
   axes: AxisConfig[];
@@ -217,7 +276,14 @@ export interface ColumnChartUIConfig {
   description?: string;
   charts: ChartConfig[];
   style: {
-    card: { wrapInCard: boolean; bg: string };
+    card: {
+      wrapInCard: boolean;
+      bg: string;
+      backgroundColor?: string;
+      borderColor?: string;
+      borderWidth?: number;
+      borderRadius?: number;
+    };
     stacked: boolean;
     showLegend: boolean;
     showDataLabels: boolean;

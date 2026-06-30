@@ -6,7 +6,7 @@
 
 body {
   font-family: 'Noto Sans Variable', sans-serif;
-  background: var(--background-default-subtle, #f5f5f5);
+  background: var(--background-surface-subtle, #f5f5f5);
 }
 
 .app {
@@ -19,20 +19,62 @@ body {
 .app__config {
   width: 280px;
   flex-shrink: 0;
-  background: var(--background-default-intense, #fff);
+  background: var(--background-surface-intense, #fff);
   border: var(--fds-border-default, 1px solid #e0e0e0);
   border-radius: var(--global-border-radius-large, 8px);
   overflow: hidden;
 }
 
-.app__widget {
+.app__stage {
   flex: 1;
   min-width: 0;
   height: 100%;
   overflow: auto;
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-04, 12px);
+}
+
+.app__widget {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: flex-start;
   justify-content: flex-start;
+}
+
+/* Dev-only Global Time Picker simulation toolbar — not part of the widget. */
+.app__gtp-sim {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-03, 8px);
+  flex-wrap: wrap;
+  padding: var(--spacing-03, 8px) var(--spacing-04, 12px);
+  background: var(--background-surface-intense, #fff);
+  border: var(--fds-border-subtle, 1px solid #eee);
+  border-radius: var(--global-border-radius-large, 8px);
+}
+
+.app__gtp-sim-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-gray-secondary, #666);
+}
+
+.app__gtp-sim-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--global-border-radius-medium, 6px);
+  border: 1px solid var(--border-gray-subtle, #d0d0d0);
+  background: var(--background-surface-subtle, #f5f5f5);
+  color: var(--text-gray-primary, #1a1a1a);
+  cursor: pointer;
+}
+
+.app__gtp-sim-btn--active {
+  background: var(--background-brand-default, #2563eb);
+  border-color: var(--background-brand-default, #2563eb);
+  color: #fff;
 }
 
 .app__empty {
@@ -40,8 +82,8 @@ body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-default-secondary, #666);
+  color: var(--text-gray-secondary, #666);
   border: var(--fds-border-subtle, 1px solid #eee);
   border-radius: var(--global-border-radius-large, 8px);
-  background: var(--background-default-intense, #fff);
+  background: var(--background-surface-intense, #fff);
 }

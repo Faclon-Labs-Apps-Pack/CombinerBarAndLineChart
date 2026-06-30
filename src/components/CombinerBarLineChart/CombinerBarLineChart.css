@@ -1,5 +1,36 @@
 /* CombinerBarLineChart widget styles */
 
+/* Header action icons (info / settings / menu). The info icon sits in a Tooltip
+   wrapper and the others in Popover wrappers; force every wrapper + icon to a
+   consistent inline-flex/centered box so the three icons line up exactly. */
+.cc-widget__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-03, 8px);
+}
+/* Info sits in a Tooltip wrapper, Settings/Menu in Popover triggers (the latter
+   default to align-items: stretch). Force every wrapper + trigger + button to a
+   consistent centered inline-flex box so the three icons line up exactly. */
+.cc-widget__actions > *,
+.cc-widget__actions .fds-popover,
+.cc-widget__actions .fds-popover__trigger,
+.cc-widget__actions .fds-tooltip-wrapper,
+.cc-widget__actions button {
+  display: inline-flex !important;
+  align-items: center !important;
+}
+.cc-widget__actions svg {
+  display: block;
+}
+
+/* Settings/Export menus: the SDK DropdownMenu rendered directly (no wrapper),
+   self-positioned. The SDK sets width:100% (for in-input use); override it so
+   the fixed-positioned menu sizes to its content, not the viewport. */
+.cc-widget__menu.fds-dropdown-menu {
+  width: max-content !important;
+  min-width: 180px;
+}
+
 .cc-widget-shell {
   width: 100%;
   height: 100%;
@@ -7,8 +38,10 @@
   flex-direction: column;
   min-height: 0;
   --cc-widget-title-font-size: 18px;
-  --cc-widget-title-color: var(--text-default-primary, #1a1a1a);
+  --cc-widget-title-color: var(--text-gray-primary, #1a1a1a);
   --cc-widget-title-weight: 600;
+  /* Cap for chart/switcher titles — matches the SDK's truncated-label width. */
+  --cc-chart-title-max-width: 240px;
 }
 
 /* Make the ChartSwitcher (fds-chart) fill the shell instead of growing to
@@ -19,6 +52,29 @@
   min-height: 0;
 }
 
+/* Wrap-Into-Card styling from the Style tab. Driven by CSS vars the widget sets
+   on the shell (--cc-card-bg / -border-color / -border-width / -border-radius).
+   Scoped to the populated render (not the borderless empty states). */
+.cc-widget-shell:not(.cc-widget-shell--borderless) > .fds-chart {
+  background-color: var(--cc-card-bg, var(--background-surface-intense, #fff));
+  border: var(--cc-card-border-width, 1px) solid var(--cc-card-border-color, var(--border-gray-muted, #e8e8e8));
+  border-radius: var(--cc-card-border-radius, var(--global-border-radius-medium, 8px));
+}
+
+/* Empty "data source not configured" state: drop the Chart card's stroke. */
+.cc-widget-shell--borderless,
+.cc-widget-shell--borderless > .fds-chart,
+.cc-widget-shell--borderless .fds-chart {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* The empty-state inner container also draws its own card border — drop it
+   inside the borderless shell so there's no nested stroke. */
+.cc-widget-shell--borderless .cc-widget--empty {
+  border: none;
+}
+
 /* The SDK canvas hard-codes min-height: 360px which forces overflow in
    short parents. Let it shrink and fill the remaining vertical space. */
 .cc-widget-shell .fds-chart__canvas {
@@ -26,19 +82,95 @@
   min-height: 0;
 }
 
-/* Advanced-settings title styling. The visible title text lives in the
-   prefix + label spans, which carry the .HeadingSmallSemibold class that
-   sets font-size/weight on themselves — so styling the container has no
-   effect. Target the spans directly, and gate behind --title-styled so the
-   SDK's default heading is preserved when advanced settings are off. */
+/* Advanced-settings title styling. Target all known SDK title/label elements
+   and use !important to override the SDK's HeadingSmallSemibold class. */
 .cc-widget-shell--title-styled .fds-chart-switcher__prefix,
-.cc-widget-shell--title-styled .fds-chart__title-label {
-  font-size: var(--cc-widget-title-font-size);
-  color: var(--cc-widget-title-color);
-  font-weight: var(--cc-widget-title-weight);
+.cc-widget-shell--title-styled .fds-chart-switcher__label,
+.cc-widget-shell--title-styled .fds-chart-switcher__title span,
+.cc-widget-shell--title-styled .fds-chart__title-label,
+.cc-widget-shell--title-styled .fds-chart__title span {
+  font-size: var(--cc-widget-title-font-size) !important;
+  color: var(--cc-widget-title-color) !important;
+  font-weight: var(--cc-widget-title-weight) !important;
 }
 
 .cc-widget--hide-title .fds-chart-switcher__title {
+  display: none;
+}
+
+/* Single chart: we still render through ChartSwitcher for a consistent title,
+   but there's nothing to switch — hide the dropdown chevron and make the title
+   non-interactive so it reads as a plain heading (no dropdown). */
+.cc-widget--single-view .fds-chart__title-icon {
+  display: none !important;
+}
+.cc-widget--single-view .fds-chart__title {
+  pointer-events: none;
+  cursor: default;
+}
+
+/* When the title row (title + duration) is empty, collapse it so the chart
+   fills the space — the filters/DatePicker live in header-main and stay. */
+.cc-widget--no-title-row .fds-chart__header-row,
+.cc-widget--no-title-row .fds-chart-switcher__title {
+  display: none;
+}
+/* When every header icon is hidden, drop the actions row (removes the flex gap
+   it would otherwise reserve at the top). */
+.cc-widget--no-actions .fds-chart__actions {
+  display: none;
+}
+
+/* With the title row collapsed, only the thin time-controls row remains in the
+   header — the card's full top padding + the header↔canvas gap leave a band of
+   empty space above the chart. Tighten both so the chart reclaims it. */
+.cc-widget--no-title-row .fds-chart {
+  padding-top: var(--spacing-02, 4px);
+  gap: var(--spacing-03, 8px);
+}
+
+/* SDK caps the title label at 240px which truncates long titles even when
+   the header has room. Let the label grow to fit, keep it left-aligned, and
+   force the title button + wrapper to be exactly content-sized so the chevron
+   sits right next to the title text instead of being pushed to the far edge. */
+/* Title is content-sized (so the chevron hugs the text) but capped at the SDK's
+   truncated-label max-width (240px); longer titles ellipsize. */
+.cc-widget-shell .fds-chart-switcher__title {
+  flex: 0 1 auto !important;
+  width: max-content !important;
+  max-width: var(--cc-chart-title-max-width, 240px) !important;
+  min-width: 0 !important;
+  margin-right: auto !important;
+}
+.cc-widget-shell .fds-chart__title {
+  display: inline-flex !important;
+  width: max-content !important;
+  max-width: var(--cc-chart-title-max-width, 240px) !important;
+  flex: 0 1 auto !important;
+  min-width: 0 !important;
+  justify-content: flex-start !important;
+}
+.cc-widget-shell .fds-chart__title-label,
+.cc-widget-shell .fds-chart-switcher__title > span {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  text-align: left !important;
+  flex: 0 1 auto !important;
+}
+.cc-widget-shell .fds-chart__header-row {
+  justify-content: flex-start !important;
+}
+
+/* Periodicity selector in the filters row — keep it compact next to the date
+   picker, and drop the empty label gap so it aligns with the picker height. */
+.cc-widget__periodicity-select {
+  width: 140px;
+  flex: 0 0 auto;
+}
+.cc-widget__periodicity-select .fds-field-header {
   display: none;
 }
 
@@ -47,6 +179,9 @@
   height: 100%;
 }
 
+/* Empty / loading states fill their container transparently — no card chrome
+   of their own (no border/stroke). The widget card (when "Wrap Into Card" is on)
+   is the only frame; an empty tab inside it draws no extra box. */
 .cc-widget--empty,
 .cc-widget--loading {
   display: flex;
@@ -54,27 +189,7 @@
   justify-content: center;
   height: 100%;
   padding: var(--spacing-06, 24px);
-  background: var(--background-default-intense, #fff);
-  border-radius: var(--global-border-radius-large, 8px);
-  border: 1px solid var(--border-gray-subtle, #e8e8e8);
+  background: transparent;
+  border: none;
 }
 
-.cc-widget__empty-text {
-  color: var(--text-default-secondary, #666);
-  text-align: center;
-  margin: 0;
-}
-
-.cc-widget__skeleton {
-  width: 100%;
-  height: 100%;
-  min-height: 240px;
-  background: var(--background-default-subtle, #f5f5f5);
-  border-radius: var(--global-border-radius-medium, 4px);
-  animation: cc-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes cc-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}

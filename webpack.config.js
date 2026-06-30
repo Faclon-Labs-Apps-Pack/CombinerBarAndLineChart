@@ -96,11 +96,15 @@ export default (env, argv) => {
     ...(!isProd && {
       devServer: {
         static: path.resolve(__dirname, 'public'),
-        host: '127.0.0.1',
+        host: '0.0.0.0',
         port: 3004,
         hot: true,
         open: false,
         historyApiFallback: true,
+        allowedHosts: 'all',
+        client: {
+          webSocketURL: 'auto://0.0.0.0:0/ws',
+        },
       },
     }),
   };

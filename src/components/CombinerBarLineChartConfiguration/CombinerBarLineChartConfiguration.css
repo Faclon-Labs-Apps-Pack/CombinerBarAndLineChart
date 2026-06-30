@@ -17,7 +17,7 @@
 }
 
 .cc-config__header-title {
-  color: var(--text-default-primary, #1a1a1a);
+  color: var(--text-gray-primary, #1a1a1a);
 }
 
 .cc-config__tab-content {
@@ -49,6 +49,58 @@
   border-bottom: 1px solid var(--border-gray-subtle, #f0f0f0);
 }
 
+/* Style tab — Widget Size / Size / Wrap Into Card blocks */
+.cc-config__style-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-02, 4px);
+  padding: var(--spacing-04, 12px) var(--spacing-05, 16px);
+  border-bottom: 1px solid var(--border-gray-subtle, #f0f0f0);
+}
+
+.cc-config__size-select {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--spacing-03, 8px);
+}
+
+.cc-config__size-select > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.cc-config__size-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-03, 8px);
+}
+
+.cc-config__size-row > .fds-text-input,
+.cc-config__size-row > :not(button) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* W/H inputs carry no label (the "Size" heading above labels the row) — hide
+   the empty field header so the inputs align cleanly with the lock button. */
+.cc-config__size-row .fds-field-header {
+  display: none;
+}
+
+.cc-config__wrap-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-04, 12px);
+  padding: var(--spacing-04, 12px) var(--spacing-05, 16px);
+  border-bottom: 1px solid var(--border-gray-subtle, #f0f0f0);
+}
+
+.cc-config__wrap-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-04, 12px);
+}
+
 .cc-config__advanced-body {
   display: flex;
   flex-direction: column;
@@ -57,14 +109,7 @@
 
 .cc-config__advanced-heading {
   margin: 0;
-  color: var(--text-default-primary, #1a1a1a);
-}
-
-.cc-config__advanced-divider {
-  height: 1px;
-  width: 100%;
-  background: var(--border-gray-subtle, #e8e8e8);
-  margin: var(--spacing-01, 4px) 0;
+  color: var(--text-gray-primary, #1a1a1a);
 }
 
 /* Chart Settings standalone section (no accordion) */
@@ -78,7 +123,69 @@
 
 .cc-config__chart-settings-heading {
   margin: 0;
-  color: var(--text-default-primary, #1a1a1a);
+  color: var(--text-gray-primary, #1a1a1a);
+}
+
+.cc-config__chart-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-03, 8px);
+}
+
+.cc-config__chart-settings-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-02, 4px);
+}
+
+.cc-config__chart-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-04, 12px);
+}
+
+.cc-config__chart-settings-formactions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-03, 8px);
+}
+
+.cc-config__chart-settings-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-02, 4px);
+}
+
+.cc-config__chart-settings-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-02, 4px);
+}
+
+/* Downstream sections always render; disabled while editing chart settings or
+   when no chart is committed yet. */
+.cc-config__sections {
+  display: contents;
+}
+
+.cc-config__sections--disabled {
+  display: block;
+  opacity: 0.45;
+  pointer-events: none;
+  user-select: none;
+}
+
+.cc-config__chart-settings-title {
+  margin: 0;
+  color: var(--text-gray-primary, #1a1a1a);
+  word-break: break-word;
+}
+
+.cc-config__chart-settings-desc {
+  margin: 0;
+  color: var(--text-gray-secondary, #555);
+  word-break: break-word;
 }
 
 /* Section body inside Accordion items */
@@ -90,8 +197,63 @@
   gap: var(--spacing-04, 12px);
 }
 
+/* Drop the SDK accordion body's inner padding so list items sit flush within
+   every configurator accordion (Data Source, Axis, Plot Lines, Plot Bands…). */
+.cc-config .fds-pa-item__body-inner {
+  padding: 0;
+}
+
+/* Delete (trash) icon buttons turn red on hover. The feather icon uses
+   currentColor, so setting color tints the glyph. */
+.cc-config button[aria-label="Delete"]:hover,
+.cc-config button[aria-label="Delete Chart"]:hover {
+  color: var(--text-error-default, #d92d20) !important;
+}
+
+/* In accordion list items the delete icon is revealed only while the row is
+   hovered (kept in the layout via opacity so the row doesn't shift). */
+.cc-config .fds-list-card button[aria-label="Delete"] {
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+.cc-config .fds-list-card:hover button[aria-label="Delete"],
+.cc-config .fds-list-card button[aria-label="Delete"]:focus-visible {
+  opacity: 1;
+}
+
+/* Delete-confirmation modal leading item: show the trash/bin icon (not the SDK
+   "error" triangle) but keep the red error-box styling so it still reads as a
+   destructive action. Mirrors the SDK .fds-modal-leading--error tokens. */
+.cc-delete-leading.fds-modal-leading--icon {
+  width: 32px;
+  height: 32px;
+  padding: var(--spacing-03, 8px);
+  border-radius: var(--global-border-radius-medium, 6px);
+  background: var(--background-error-secondary, #fef3f2);
+  color: var(--text-error-default, #d92d20);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Short explanatory note (info icon + text) at the top of a section / modal. */
+.cc-config__modal-hint {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-02, 6px);
+  color: var(--text-gray-secondary, #555);
+}
+
+/* Leading info icon — inherits the hint text colour via currentColor; nudged
+   down 1px so it aligns with the first line of text. */
+.cc-config__modal-hint-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 .cc-config__empty-hint {
-  color: var(--text-default-tertiary, #aaa);
+  color: var(--text-gray-tertiary, #aaa);
   margin: 0;
   font-style: italic;
 }
@@ -105,7 +267,7 @@
   padding: var(--spacing-04, 12px);
   border: 1px solid var(--border-gray-subtle, #e8e8e8);
   border-radius: var(--global-border-radius-medium, 6px);
-  background: var(--background-default-subtle, #fafafa);
+  background: var(--background-surface-subtle, #fafafa);
 }
 
 .cc-config__inline-card-header {
@@ -128,7 +290,7 @@
   padding: var(--spacing-04, 12px);
   border: 1px solid var(--border-gray-subtle, #e8e8e8);
   border-radius: var(--global-border-radius-medium, 6px);
-  background: var(--background-default-subtle, #fafafa);
+  background: var(--background-surface-subtle, #fafafa);
 }
 
 .cc-config__stack-header {
@@ -150,11 +312,16 @@
 }
 
 .cc-config__field-label {
-  color: var(--text-default-secondary, #555);
+  color: var(--text-gray-secondary, #555);
 }
 
 .cc-config__field-label--bold {
   font-weight: 700;
+}
+
+/* Text beside toggle switches — Body/SmallSemibold + text/gray primary. */
+.cc-config__toggle-label {
+  color: var(--text-gray-primary, #1a1a1a);
 }
 
 .cc-config__widget-elements-group {
@@ -176,13 +343,69 @@
   align-self: center;
 }
 
-/* Time tab padding */
-.cc-config__time-tab {
+/* Time tab: ensure every panel/row keeps a consistent 16px horizontal gutter.
+   The SDK already applies this; we set it explicitly so it can't be lost. */
+.cc-config__time-tab .fds-ttc__top-fields,
+.cc-config__time-tab .fds-ttc__switch-row,
+.cc-config__time-tab .fds-ttc__per-source,
+.cc-config__time-tab .fds-ttc__deviation,
+.cc-config__time-tab .fds-ttc__deviation-card,
+.cc-config__time-tab .fds-ttc__picker-placeholder,
+.cc-config__time-tab .fds-ttc__tz-empty {
+  padding-left: var(--spacing-05, 16px);
+  padding-right: var(--spacing-05, 16px);
 }
 
-/* Add/Edit series modal */
+/* When "Advance Settings" (per-source indicators) is on, the chart-wide
+   "General Behaviour of Deviation Indicator" cards are redundant — grey them out
+   and make them non-interactive. */
+.cc-config__time-tab--per-source .fds-ttc__deviation {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* The Cycle Time form (Type / Identifier / Hr-Min / Day / Date-Month) sits
+   flush — the SDK gives .fds-ttc__cycle-body no horizontal inset, so we must
+   not add one. */
+.cc-config__time-tab .fds-ttc__cycle-body {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The "Future Days Allowed" field (the only .fds-ttc__field-pad consumer) keeps
+   a 16px horizontal gutter, consistent with the other time-tab rows. */
+.cc-config__time-tab .fds-ttc__field-pad {
+  padding-left: var(--spacing-05, 16px);
+  padding-right: var(--spacing-05, 16px);
+}
+
+/* The SDK marks some switch rows (e.g. "Disable Periodicities") as --flush
+   (padding: 0) so they sit edge-to-edge with the section below. Our blanket
+   16px rule above out-specifies that modifier and re-pads them — restore flush. */
+.cc-config__time-tab .fds-ttc__switch-row--flush {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Add/Edit side modal — anchored flush-right of the config column. JS sets
+   --cc-modal-anchor-y (the resolved modal top); the modal grows from there down
+   to 16px from the viewport bottom, with the body scrolling if it overflows. */
+.cc-series-modal.fds-modal__backdrop--transparent {
+  pointer-events: auto;
+}
+
 .cc-series-modal .fds-modal {
   width: 300px;
+  max-height: calc(100vh - var(--cc-modal-anchor-y, 16px) - 16px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cc-series-modal .fds-modal__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .cc-series-modal__body {
@@ -217,7 +440,7 @@
   flex-shrink: 0;
   padding: var(--spacing-04, 12px) var(--spacing-05, 16px);
   border-top: 1px solid var(--border-gray-subtle, #f0f0f0);
-  background: var(--background-default-primary, #fff);
+  background: var(--background-surface-intense, #fff);
 }
 
 .cc-config__footer > * {
@@ -242,15 +465,27 @@
   gap: var(--spacing-02, 6px);
 }
 
-.cc-config__add-chart-error {
-  color: var(--text-feedback-negative, #dc2626);
-  margin: 0 0 var(--spacing-03, 8px);
-}
-
-
 /* The UNS dropdown renders via createPortal at document.body with z-index 100
    (--global-z-index-dropdown). The modal backdrop sits at z-index 300
    (--global-z-index-overlay). Force the dropdown above the modal. */
 .fds-uns-path-input__popover {
   z-index: 500 !important;
+}
+
+/* Dropdown menu items: the SDK sizes item content to max-content and the title
+   to nowrap, so long titles widen the panel and overflow. Let the content
+   shrink and truncate the title with an ellipsis instead. (Dropdowns portal to
+   document.body, so these can't be scoped under .cc-config.) */
+.fds-dropdown-menu .fds-action-list-item__content,
+.fds-dropdown-menu .fds-action-list-item__title-row {
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.fds-dropdown-menu .fds-action-list-item__title {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
