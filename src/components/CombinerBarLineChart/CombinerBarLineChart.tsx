@@ -38,10 +38,10 @@ import './CombinerBarLineChart.css';
 
 interface CombinedBarLineChartProps {
   config?: ColumnChartUIConfig;
+  /** Resolved data. In Comparison Mode each series entry also carries the prior
+   *  window inline as `comparisonSlots` (drives the ▲/▼ deviation overlay) — no
+   *  separate comparisonData prop. */
   data?: DataEntry[];
-  /** Comparison-period data (same shape as `data`) — supplied by the engine when
-   *  the time tab's Comparison Mode is on. Drives the ▲/▼ deviation overlay. */
-  comparisonData?: DataEntry[];
   onEvent: (event: WidgetEvent) => void;
   timeConfig?: TimeConfig;
   /** Host sets this while the engine is resolving data, to suppress the
@@ -145,6 +145,28 @@ function getSeriesData(key: string, data: DataEntry[]): SeriesPayload | null {
     return v as SeriesPayload;
   }
   return null;
+}
+
+// Comparison-period counterpart of getSeriesData: the prior window rides INLINE
+// on the SAME data entry as `comparisonSlots` (present only when Comparison Mode
+// sent a comparison window), so we read it straight from `data` — no separate
+// comparisonData array. Comparison-slot labels can be blank, so backfill from
+// the same-index current slot (equal bucket count) for the tooltip's "vs <date>"
+// footer. Returns null when the entry carries no comparison slots.
+function getComparisonSeriesData(key: string, data: DataEntry[]): SeriesPayload | null {
+  const entry = data.find((d) => d.key === key);
+  if (!entry || !Array.isArray(entry.comparisonSlots)) return null;
+  const slots = entry.comparisonSlots.map((s, i) => ({
+    ...s,
+    label: s.label || entry.slots?.[i]?.label || '',
+  }));
+  return {
+    __type: 'series',
+    path: entry.path ?? '',
+    meta: entry.meta as SeriesPayload['meta'],
+    range: entry.range ?? { from: 0, to: 0 },
+    slots,
+  };
 }
 
 function getValue(key: string, config: unknown, data: DataEntry[]): string | number | null {
@@ -625,7 +647,6 @@ function buildChartComparison(
   chart: ChartConfig,
   ci: number,
   data: DataEntry[],
-  comparisonData: DataEntry[],
   // Per-source deviation polarity overrides keyed by `${chartId}:${sourceId}`
   // (Advanced Settings → per-source indicator). Undefined when the feature is
   // off, in which case every series falls back to the chart-wide pattern.
@@ -640,9 +661,10 @@ function buildChartComparison(
   const n = categories.length;
 
   // Comparison-period bucket labels (same index alignment) — drive the tooltip's
-  // "vs <date>" footer. Falls back to the current labels if the window is absent.
+  // "vs <date>" footer. Read from each entry's inline `comparisonSlots`; falls
+  // back to the current labels if the window is absent.
   const firstCmpPayload = chart.series.reduce<SeriesPayload | null>(
-    (acc, _, i) => acc ?? getSeriesData(`charts[${ci}].series[${i}].unsPath`, comparisonData),
+    (acc, _, i) => acc ?? getComparisonSeriesData(`charts[${ci}].series[${i}].unsPath`, data),
     null,
   );
   const comparisonCategories = firstCmpPayload
@@ -651,7 +673,7 @@ function buildChartComparison(
 
   const sources: ComparisonSourceData[] = chart.series.map((s, i) => {
     const cur = getSeriesData(`charts[${ci}].series[${i}].unsPath`, data);
-    const cmp = getSeriesData(`charts[${ci}].series[${i}].unsPath`, comparisonData);
+    const cmp = getComparisonSeriesData(`charts[${ci}].series[${i}].unsPath`, data);
     const current    = cur ? cur.slots.map((slot) => slot.value ?? null) : new Array(n).fill(null);
     const comparison = cmp ? cmp.slots.map((slot) => slot.value ?? null) : new Array(n).fill(null);
     // Per-source polarity override wins over the chart-wide default (the SDK's
@@ -670,7 +692,7 @@ function buildChartComparison(
   return { sources, categories, comparisonCategories };
 }
 
-export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], comparisonData, onEvent, timeConfig, loading, error }: CombinedBarLineChartProps) {
+export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEvent, timeConfig, loading, error }: CombinedBarLineChartProps) {
   const chartRef = useRef<unknown>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1129,7 +1151,8 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], comp
   // (gating on it made the overlay/tooltip silently disappear when out of sync).
   // Shift mode is mutually exclusive — when Shift is on, comparison stands down.
   const comparisonOn =
-    comparisonModeOn && !shiftOn && Array.isArray(comparisonData) && comparisonData.length > 0;
+    comparisonModeOn && !shiftOn &&
+    data.some((d) => Array.isArray(d.comparisonSlots) && d.comparisonSlots.length > 0);
   const deviationPattern: DeviationPattern =
     timeConfig?.deviationPattern === 'red-up-positive' ? 'red-up-positive' : 'green-up-positive';
   // Per-source overrides only apply when "Advanced Settings → per-source
@@ -1168,11 +1191,11 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], comp
       // only chart that carries the comparison render contract).
       // NOTE: ComboLineChart isn't passed plotLines/plotBands, so plot lines
       // (and their axis choice) don't render in comparison mode — by design.
-      if (comparisonOn && comparisonData) {
+      if (comparisonOn) {
         // Guard the comparison pipeline so a bad data shape can never blank the
         // whole widget — on any error fall through to the normal chart below.
         try {
-          const cmp = buildChartComparison(chart, ci, data, comparisonData, perSourceOverrides);
+          const cmp = buildChartComparison(chart, ci, data, perSourceOverrides);
           if (cmp && cmp.sources.length > 0) {
             const { series } = buildComparisonSeries({ sources: cmp.sources, deviationPattern });
             return {

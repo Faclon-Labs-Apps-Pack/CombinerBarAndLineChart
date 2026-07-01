@@ -71,6 +71,24 @@ function hasValues(entries?: DataEntry[]): boolean {
   );
 }
 
+// True when at least one entry carries a non-null comparison slot value.
+function hasComparisonValues(entries?: DataEntry[]): boolean {
+  return Array.isArray(entries) && entries.some(
+    (e) => Array.isArray(e.comparisonSlots) && e.comparisonSlots.some((s) => s.value != null),
+  );
+}
+
+// Attach a comparison window onto each entry INLINE as `comparisonSlots`, keyed
+// by binding key. The widget reads these directly (no parallel comparisonData
+// array). Used only by the dev-mock path — the live backend already returns
+// comparisonSlots inline per entry.
+function attachComparisonSlots(items: DataEntry[], comparison: DataEntry[]): DataEntry[] {
+  return items.map((e) => {
+    const cmp = comparison.find((c) => c.key === e.key);
+    return { ...e, comparisonSlots: cmp?.slots ?? e.comparisonSlots };
+  });
+}
+
 interface MiniEngineCtx {
   authentication: string;
   // Local picker emit (intent override). Honored only in `local` mode.
@@ -84,7 +102,7 @@ interface MiniEngineCtx {
 export async function resolve(
   envelope: ColumnChartEnvelope,
   ctx: MiniEngineCtx,
-): Promise<{ config: ColumnChartUIConfig; data: DataEntry[]; comparisonData?: DataEntry[] }> {
+): Promise<{ config: ColumnChartUIConfig; data: DataEntry[] }> {
   const { startTime, endTime, periodicity } = computeWindow(envelope, ctx);
   const bindings = envelope.dynamicBindingPathList ?? [];
 
@@ -109,11 +127,13 @@ export async function resolve(
     // harness) — still synthesize data so the widget can be previewed.
     if (MOCK_WHEN_EMPTY) {
       const tf = PERIODICITY_TIME_FRAME[(periodicity ?? 'daily').toLowerCase()] ?? 'day';
-      const data = makeDummyData(bindings, startTime, endTime, tf, 0, 1);
-      const comparisonData = envelope.timeConfig?.comparisonMode
-        ? makeDummyData(bindings, startTime - Math.max(0, endTime - startTime), startTime, tf, 0.6, 0.88)
-        : undefined;
-      return { config: envelope.uiConfig, data, comparisonData };
+      let data = makeDummyData(bindings, startTime, endTime, tf, 0, 1);
+      if (envelope.timeConfig?.comparisonMode) {
+        const span = Math.max(0, endTime - startTime);
+        const dummyCmp = makeDummyData(bindings, startTime - span, startTime, tf, 0.6, 0.88);
+        data = attachComparisonSlots(data, dummyCmp);
+      }
+      return { config: envelope.uiConfig, data };
     }
     return { config: envelope.uiConfig, data: [] };
   }
@@ -182,32 +202,20 @@ export async function resolve(
       items = makeDummyData(bindingsPayload, startTime, endTime, timeFrame, 0, 1);
     }
 
-    // Split the prior-period buckets the API returned (entry.comparisonSlots)
-    // into a parallel comparisonData: DataEntry[] the widget overlays. Labels on
-    // comparisonSlots can be blank, so backfill from the same-index current
-    // bucket (equal bucket count) for the tooltip's "vs <date>" footer.
-    let comparisonData: DataEntry[] | undefined;
-    if (comparisonMode) {
-      comparisonData = items.map((e) => ({
-        ...e,
-        slots: (e.comparisonSlots ?? []).map((s, i) => ({
-          ...s,
-          label: s.label || e.slots?.[i]?.label || '',
-        })),
-        comparisonSlots: undefined,
-        range: { from: compStart, to: compEnd },
-      }));
-      // Dev fallback: when the live fetch was empty/unauthenticated (so `items`
-      // is synthetic and carried no comparisonSlots) synthesize the comparison
-      // window too, so the deviation tooltip still has something to compute.
-      if (MOCK_WHEN_EMPTY && !hasValues(comparisonData)) {
-        comparisonData = makeDummyData(bindingsPayload, compStart, compEnd, timeFrame, 0.6, 0.88);
-      }
+    // The live backend returns each entry's prior-period buckets INLINE as
+    // `comparisonSlots` (parallel to `slots`), which the widget reads directly —
+    // no parallel comparisonData array. Dev fallback: when the live fetch was
+    // empty/unauthenticated (so `items` is synthetic and carried no
+    // comparisonSlots) synthesize the comparison window and attach it inline, so
+    // the deviation tooltip still has something to compute.
+    if (comparisonMode && MOCK_WHEN_EMPTY && !hasComparisonValues(items)) {
+      const dummyCmp = makeDummyData(bindingsPayload, compStart, compEnd, timeFrame, 0.6, 0.88);
+      items = attachComparisonSlots(items, dummyCmp);
     }
 
     // Pass resolveAndCompute items through AS-IS (raw shape) — same as the
     // production Lens Data Engine. No reshaping/wrapping here.
-    return { config: envelope.uiConfig, data: items, comparisonData };
+    return { config: envelope.uiConfig, data: items };
   } catch {
     return { config: envelope.uiConfig, data: [] };
   }

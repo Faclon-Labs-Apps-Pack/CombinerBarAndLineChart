@@ -158,8 +158,9 @@ function timeCfgWindowInputs(tc?: TimeConfig) {
     // re-resolve (e.g. switching a fixed duration from Daily → Hourly).
     defaultPeriodicity: tc.defaultPeriodicity ?? null,
     // Comparison Mode decides whether the engine ALSO fetches the prior-period
-    // window. Toggling it must re-resolve so `comparisonData` is (re)generated —
-    // otherwise enabling comparison never produces the overlay/deviation tooltip.
+    // window. Toggling it must re-resolve so each entry's inline `comparisonSlots`
+    // is (re)generated — otherwise enabling comparison never produces the
+    // overlay/deviation tooltip.
     comparisonMode: tc.comparisonMode ?? false,
   };
 }
@@ -167,7 +168,6 @@ function timeCfgWindowInputs(tc?: TimeConfig) {
 export default function App() {
   const [envelope, setEnvelope] = useState<ColumnChartEnvelope | undefined>(makeSeedEnvelope);
   const [data, setData] = useState<DataEntry[]>([]);
-  const [comparisonData, setComparisonData] = useState<DataEntry[] | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [auth, setAuth] = useState<string>(localStorage.getItem('bearer_token') ?? '');
@@ -245,15 +245,13 @@ export default function App() {
     setLoading(true);
     setError(false);
     resolve(envelope, { authentication: auth, override: effOverride, globalTimeWindow: gw })
-      .then(({ data: resolved, comparisonData: resolvedComparison }) => {
-        console.log('[App] resolved data:', resolved, 'comparison:', resolvedComparison);
+      .then(({ data: resolved }) => {
+        console.log('[App] resolved data:', resolved);
         setData(resolved);
-        setComparisonData(resolvedComparison);
       })
       .catch((err) => {
         console.error('[App] resolve failed:', err);
         setData([]);
-        setComparisonData(undefined);
         setError(true);
       })
       .finally(() => setLoading(false));
@@ -317,7 +315,7 @@ export default function App() {
           style={envelope ? { flex: '0 0 auto', width: widgetSize.width, height: widgetSize.height } : undefined}
         >
           {envelope ? (
-            <CombinedBarLineChart config={envelope.uiConfig} data={data} comparisonData={comparisonData} onEvent={handleEvent} timeConfig={envelope.timeConfig} loading={loading} error={error} />
+            <CombinedBarLineChart config={envelope.uiConfig} data={data} onEvent={handleEvent} timeConfig={envelope.timeConfig} loading={loading} error={error} />
           ) : (
             <div className="app__empty">
               <p className="BodyMediumRegular">Configure the widget in the left panel to preview it here.</p>

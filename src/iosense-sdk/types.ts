@@ -58,8 +58,8 @@ export interface DataEntry {
   slots?: SeriesSlot[];
   // Comparison-period buckets, returned alongside `slots` by resolveAndCompute
   // when the request carries comparisonMode + comparisonStartTime/EndTime. Same
-  // index alignment / bucket count as `slots`. The engine splits these out into
-  // a separate comparisonData: DataEntry[] for the widget's overlay.
+  // index alignment / bucket count as `slots`. The widget reads these inline
+  // (getComparisonSeriesData) for its overlay — no separate comparisonData array.
   comparisonSlots?: SeriesSlot[];
   meta?: SeriesMeta;
   range?: { from: number; to: number };
