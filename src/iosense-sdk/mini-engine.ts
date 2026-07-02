@@ -89,6 +89,47 @@ function attachComparisonSlots(items: DataEntry[], comparison: DataEntry[]): Dat
   });
 }
 
+// True when any entry already carries backend-tagged shift slots (`slot.shift`).
+function hasShiftTags(entries?: DataEntry[]): boolean {
+  return Array.isArray(entries) && entries.some(
+    (e) => Array.isArray(e.slots) && e.slots.some((s) => typeof s.shift === 'string' && s.shift.length > 0),
+  );
+}
+
+// Which shift a bucket belongs to: the shift whose time-of-day window contains
+// the bucket's start. Windows are "HH:MM"; a window whose end <= start wraps
+// past midnight (e.g. 22:00→06:00). Falls back to the first shift so a bucket is
+// never left untagged.
+function shiftNameForBucket(
+  fromTs: number,
+  shifts: Array<{ name: string; startTime: string; endTime: string }>,
+): string | undefined {
+  const d = new Date(fromTs);
+  const mins = d.getHours() * 60 + d.getMinutes();
+  for (const s of shifts) {
+    const [sh, sm] = s.startTime.split(':').map(Number);
+    const [eh, em] = s.endTime.split(':').map(Number);
+    const start = sh * 60 + sm;
+    const end = eh * 60 + em;
+    const inWin = start <= end ? (mins >= start && mins < end) : (mins >= start || mins < end);
+    if (inWin) return s.name;
+  }
+  return shifts[0]?.name;
+}
+
+// Dev-mock: tag each bucket with the shift its start falls in, so the widget's
+// data-driven shift render (`slot.shift`) lights up without a live backend. The
+// live backend already returns tagged slots, so this only fires as a fallback.
+function tagShiftSlots(
+  items: DataEntry[],
+  shifts: Array<{ name: string; startTime: string; endTime: string }>,
+): DataEntry[] {
+  return items.map((e) => ({
+    ...e,
+    slots: (e.slots ?? []).map((s) => ({ ...s, shift: shiftNameForBucket(s.from, shifts) })),
+  }));
+}
+
 interface MiniEngineCtx {
   authentication: string;
   // Local picker emit (intent override). Honored only in `local` mode.
@@ -159,7 +200,13 @@ export async function resolve(
     // window (same length, ending where the current window starts). The backend
     // returns BOTH windows in ONE call — slots (current) + comparisonSlots
     // (prior) per entry — so we request comparison inline rather than refetching.
-    const comparisonMode = Boolean(envelope.timeConfig?.comparisonMode);
+    // Live Shift intent (date-picker toggle) rides the override. It is mutually
+    // exclusive with comparison and MUST win over the persisted `comparisonMode`
+    // config flag — otherwise enabling Shift keeps returning comparison buckets
+    // and the widget never leaves comparison mode.
+    const overrideShifts = ctx.override?.shifts;
+    const shiftActive = Array.isArray(overrideShifts) && overrideShifts.length > 0;
+    const comparisonMode = Boolean(envelope.timeConfig?.comparisonMode) && !shiftActive;
     let compStart = 0;
     let compEnd = 0;
     if (comparisonMode) {
@@ -177,14 +224,16 @@ export async function resolve(
     // Comparison and shift are mutually exclusive — comparison wins. When shift
     // comparison is active (comparison off + shifts configured) the engine sends
     // the configured `shifts` array verbatim per the SDK contract.
-    const shifts = envelope.timeConfig?.shifts;
     const extras = comparisonMode
       ? { comparisonMode: true, comparisonStartTime: compStart, comparisonEndTime: compEnd }
-      : (shifts && shifts.length > 0
-          ? { shifts: shifts as unknown as Array<Record<string, unknown>> }
+      : (shiftActive
+          ? {
+              shifts: overrideShifts as unknown as Array<Record<string, unknown>>,
+              shiftAggregator: ctx.override?.shiftAggregator,
+            }
           : undefined);
     if (extras && 'shifts' in extras) {
-      console.log('[MiniEngine] shift comparison — sending shifts verbatim', extras.shifts);
+      console.log('[MiniEngine] shift mode — sending shifts verbatim', extras.shifts);
     }
 
     let items: DataEntry[] = [];
@@ -211,6 +260,14 @@ export async function resolve(
     if (comparisonMode && MOCK_WHEN_EMPTY && !hasComparisonValues(items)) {
       const dummyCmp = makeDummyData(bindingsPayload, compStart, compEnd, timeFrame, 0.6, 0.88);
       items = attachComparisonSlots(items, dummyCmp);
+    }
+
+    // Dev fallback for Shift mode: synthetic (and legacy-backend) slots carry no
+    // shift tag, so the widget can't tell it's shift data. Tag each bucket by its
+    // time-of-day window so the per-shift render lights up. Best visualized at an
+    // hourly/minute range where buckets span different shift windows.
+    if (shiftActive && MOCK_WHEN_EMPTY && overrideShifts && !hasShiftTags(items)) {
+      items = tagShiftSlots(items, overrideShifts);
     }
 
     // Pass resolveAndCompute items through AS-IS (raw shape) — same as the

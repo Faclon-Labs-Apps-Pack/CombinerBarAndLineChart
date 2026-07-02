@@ -25,6 +25,17 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
+// cycleTime.month → 0-based month index (year boundary). The time-picker emits a
+// 1-based month number ('4' or 4 = April, financial-year start); older configs
+// may store a month NAME ('April'). Accept both; default to January (0).
+function cycleMonthIndex(month: string | number | undefined): number {
+  if (month === undefined || month === null || month === '') return 0;
+  const n = Number(month);
+  if (Number.isFinite(n) && n >= 1 && n <= 12) return n - 1; // 1-based number
+  const byName = MONTH_NAMES.indexOf(String(month));         // legacy month name
+  return byName >= 0 ? byName : 0;
+}
+
 function addPeriodToDate(d: Date, n: number, period: string): Date {
   const r = new Date(d);
   switch (period) {
@@ -68,9 +79,13 @@ function getPeriodAsPerCycle(period: string, event: string, cycleTime: CycleTime
       break;
     }
     case 'year': {
-      const selMonth = Math.max(0, MONTH_NAMES.indexOf(cycleTime.month ?? ''));
+      // Financial-year boundary: year starts at the configured cycle month
+      // (e.g. April) / date / time. Step back a year when that boundary is still
+      // in the future so we anchor to the financial year that CONTAINS `now`.
+      const selMonth = cycleMonthIndex(cycleTime.month);
       const selDate  = Number(cycleTime.date || 1);
       base = new Date(now.getFullYear(), selMonth, selDate, ch, cm, 0, 0);
+      if (now < base) base = addPeriodToDate(base, -1, 'year');
       break;
     }
     default:

@@ -13,6 +13,10 @@ export interface SeriesSlot {
   value: number | null;
   quality: string;
   isPartial?: boolean;
+  /** Shift name this bucket belongs to — set by the backend when the request
+   *  carried a `shifts` array. Used to plot each bucket under the correct shift
+   *  series instead of re-deriving the time window client-side. */
+  shift?: string;
 }
 
 export interface SeriesAggregation {
@@ -84,14 +88,14 @@ export interface Duration {
 // Raw cycle-time config (matches the platform's GTPCycleTimeConfig). The
 // resolver reads these fields directly, mirroring the GlobalTimePicker
 // reference: hour:minute = day boundary, dayOfWeek = week boundary (0=Sun),
-// date = month boundary day, month = year boundary (month NAME e.g. "January").
+// date = month boundary day, month = year boundary (1-based number, 4 = April).
 export interface CycleTime {
   identifier?: string;            // 'start' | 'end'
   hour?: string | number;
   minute?: string | number;
   dayOfWeek?: number | null;
   date?: string | number;
-  month?: string;                 // month name, e.g. "January"
+  month?: string | number;        // 1-based month number for year boundary, e.g. 4 = April (name also accepted)
 }
 
 export interface TimeConfig {
@@ -151,6 +155,12 @@ export interface TimeWindow {
   // uses it verbatim instead of deriving the immediately-preceding window.
   comparisonStartTime?: number;
   comparisonEndTime?: number;
+  // Live shift intent from the date picker's Shift toggle. When present (and
+  // non-empty) the engine resolves per-shift buckets and this overrides the
+  // persisted `comparisonMode` config flag — Shift and Compare are mutually
+  // exclusive, so an active shift request must stand comparison down.
+  shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string }>;
+  shiftAggregator?: string;
 }
 
 export type WidgetEvent =

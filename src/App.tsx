@@ -263,13 +263,18 @@ export default function App() {
       // Only the LOCAL picker emits TIME_CHANGE; treat it as the override. When
       // the Compare panel is applied the payload also carries the comparison
       // window — pass it through so the engine resolves that exact period.
-      const { comparisonStartTime, comparisonEndTime } = event.payload;
+      const { comparisonStartTime, comparisonEndTime, shifts, shiftAggregator } = event.payload;
       const override: TimeWindow = {
         startTime: Number(event.payload.startTime),
         endTime: Number(event.payload.endTime),
         periodicity: event.payload.periodicity,
         ...(comparisonStartTime != null && comparisonEndTime != null
           ? { comparisonStartTime: Number(comparisonStartTime), comparisonEndTime: Number(comparisonEndTime) }
+          : {}),
+        // Carry the Shift toggle intent so the engine switches to per-shift
+        // buckets and stops sending the persisted comparison window.
+        ...(Array.isArray(shifts) && shifts.length > 0
+          ? { shifts, shiftAggregator }
           : {}),
       };
       console.log('[App] TIME_CHANGE override', {

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ColumnChart as ColumnChartDisplay } from '@faclon-labs/design-sdk/ColumnChart';
 import { ComboLineChart } from '@faclon-labs/design-sdk/ComboLineChart';
 import { buildComparisonSeries } from '@faclon-labs/design-sdk';
-import type { ComparisonSourceData } from '@faclon-labs/design-sdk';
+import type { ComparisonSourceData, ChartShiftConfig, ShiftSeriesInput } from '@faclon-labs/design-sdk';
 import { LineChart } from '@faclon-labs/design-sdk/LineChart';
 import { AreaChart } from '@faclon-labs/design-sdk/AreaChart';
 import { ChartSwitcher } from '@faclon-labs/design-sdk/ChartSwitcher';
@@ -700,6 +700,98 @@ function buildChartComparison(
   return { sources, categories, comparisonCategories };
 }
 
+// Shift-mode series for one chart, built directly from the backend-tagged slots
+// (each bucket carries `slot.shift` = the shift name it belongs to). Every
+// source × enabled-shift becomes one ShiftSeriesInput whose data holds the
+// bucket value only where that bucket is tagged with the shift (null elsewhere),
+// so the SDK renders one segmented series per shift. `seriesType` keeps combo
+// sources drawing as columns (bars) or lines exactly as configured. Returns null
+// when there is no data or no enabled shift to draw.
+function buildChartShift(
+  chart: ChartConfig,
+  ci: number,
+  data: DataEntry[],
+  cfgShifts: Array<{ id: string; name: string; startTime: string; endTime: string; color: string }>,
+  enabledShiftIds: Set<string>,
+  subDaily: boolean,
+  onToggleShift: (id: string) => void,
+): { shift: ChartShiftConfig; categories: string[] } | null {
+  const firstPayload = chart.series.reduce<SeriesPayload | null>(
+    (acc, _, i) => acc ?? getSeriesData(`charts[${ci}].series[${i}].unsPath`, data),
+    null,
+  );
+  if (!firstPayload || firstPayload.slots.length === 0) return null;
+  // The backend returns one bucket per (bucket × shift): at Daily+ every day
+  // carries a value for EVERY shift, so the same day label repeats once per
+  // shift. Collapse to UNIQUE labels (in order) — that is the real x-axis; each
+  // shift then becomes one full line across all days. At sub-daily each label
+  // already appears once (a bucket belongs to a single shift), so this is a
+  // no-op there.
+  const categories: string[] = [];
+  const seenLabel = new Set<string>();
+  for (const slot of firstPayload.slots) {
+    if (!seenLabel.has(slot.label)) { seenLabel.add(slot.label); categories.push(slot.label); }
+  }
+
+  const out: Array<ShiftSeriesInput & { seriesType: 'line' | 'column' }> = [];
+  chart.series.forEach((s, si) => {
+    const payload = getSeriesData(`charts[${ci}].series[${si}].unsPath`, data);
+    const slots = payload?.slots ?? [];
+    // Index this source's values by `${label} ${shiftName}` so each shift
+    // line can pull its value for every day in one lookup.
+    const byLabelShift = new Map<string, number | null>();
+    for (const slot of slots) {
+      if (typeof slot.shift === 'string' && slot.shift.length > 0) {
+        byLabelShift.set(`${slot.label} ${slot.shift}`, slot.value ?? null);
+      }
+    }
+    const seriesType: 'line' | 'column' = s.chartType === 'Line' ? 'line' : 'column';
+    cfgShifts.forEach((shift, shIdx) => {
+      if (!enabledShiftIds.has(shift.id)) return;
+      out.push({
+        sourceId: s._id,
+        sourceName: s.label || `Series ${si + 1}`,
+        sourceIndex: si,
+        shiftId: shift.id,
+        shiftName: shift.name,
+        shiftIndex: shIdx,
+        shiftColor: shift.color,
+        seriesType,
+        data: categories.map((label, li) => {
+          // This shift's value for the day (Daily: present for every day → one
+          // full line per shift; sub-daily: present only where the bucket is
+          // this shift).
+          const key = `${label} ${shift.name}`;
+          if (byLabelShift.has(key)) return byLabelShift.get(key) ?? null;
+          // Sub-daily boundary bridge: contiguous time-of-day blocks join into
+          // one line by repeating the previous bucket's value at the first
+          // bucket of the next shift's run.
+          if (subDaily) {
+            const prev = categories[li - 1];
+            const prevKey = prev !== undefined ? `${prev} ${shift.name}` : '';
+            if (byLabelShift.has(prevKey)) return byLabelShift.get(prevKey) ?? null;
+          }
+          return null;
+        }),
+      });
+    });
+  });
+  if (out.length === 0) return null;
+
+  return {
+    shift: {
+      series: out,
+      sources: chart.series.map((s, i) => ({ index: i, name: s.label || `Series ${i + 1}` })),
+      shifts: cfgShifts.map((s) => ({
+        id: s.id, name: s.name, color: s.color, enabled: enabledShiftIds.has(s.id),
+      })),
+      onToggleShift,
+      onToggleSource: () => {},
+    },
+    categories,
+  };
+}
+
 export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEvent, timeConfig, loading, error }: CombinedBarLineChartProps) {
   const chartRef = useRef<unknown>(null);
   const shellRef = useRef<HTMLDivElement>(null);
@@ -740,6 +832,27 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   // Mirrors shiftOn so the Shift toggle handler can emit a TIME_CHANGE before its
   // setState flushes (same trick as compRangeRef for the Compare toggle).
   const shiftOnRef = useRef(false);
+  // Configured shift windows (from the time tab / GTP) and which of them are
+  // currently drawn. The legend chips toggle members of this set client-side —
+  // no re-fetch, since all shift buckets already arrived in `slots`.
+  const cfgShifts = timeConfig?.shifts ?? [];
+  const cfgShiftIdKey = cfgShifts.map((s) => s.id).join('|');
+  const [enabledShiftIds, setEnabledShiftIds] = useState<Set<string>>(
+    () => new Set(cfgShifts.map((s) => s.id)),
+  );
+  // Re-enable every shift whenever the configured set changes (config edit / GTP
+  // reset), so a newly added shift isn't hidden and a removed one is dropped.
+  useEffect(() => {
+    setEnabledShiftIds(new Set(cfgShiftIdKey ? cfgShiftIdKey.split('|') : []));
+  }, [cfgShiftIdKey]);
+  function toggleShift(id: string) {
+    setEnabledShiftIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   // Latest main range, kept in a ref so the Compare callback (which fires
   // separately from the main onRangeChange on Apply) always pairs with the
   // current main window instead of a stale render's `range` state.
@@ -1139,8 +1252,30 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   function handlePresetSelect(durationId: string) {
     const dur = (timeConfig?.allDurations ?? []).find((d) => d.id === durationId);
     if (!dur) {
+      // Built-in SDK preset (today/yesterday/…): it isn't in allDurations, so
+      // resolve its window through the SDK and emit right away. Previously this
+      // branch only set the label and returned — so clicking a built-in preset
+      // never patched the range end time nor emitted a TIME_CHANGE (the chart
+      // only updated after the user also pressed Apply).
       setPreset(durationId);
       setPresetLabel(DATEPICKER_PRESET_LABELS[durationId] ?? durationId.replace(/_/g, ' '));
+      const r = getPresetDateRange(durationId);
+      if (r?.start && r?.end) {
+        const startMs = r.start.getTime();
+        // getPresetDateRange returns single-day presets (today/yesterday) as a
+        // zero-width [dayStart, dayStart] window — sending startTime === endTime
+        // fetches no data. Advance endTime to the real period end as epoch ms:
+        // the current day runs up to NOW (full-precision), a past day to its
+        // end-of-day. startTime/endTime stay epoch-millisecond values.
+        let endMs = r.end.getTime();
+        if (endMs <= startMs) endMs = Math.min(startMs + 86_400_000, Date.now());
+        const start = new Date(startMs);
+        const end = new Date(endMs);
+        rangeRef.current = { start, end };
+        setRange({ start, end });
+        setDrillPath([]);
+        emitTimeChange(startMs, endMs, basePeriodicity.toLowerCase());
+      }
       return;
     }
     // Respect the configured cycle time when snapping the duration's window.
@@ -1196,6 +1331,17 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   // carries a comparison window, we show it.
   const comparisonOn =
     data.some((d) => Array.isArray(d.comparisonSlots) && d.comparisonSlots.length > 0);
+  // Shift render is data-driven too: whenever the engine tagged buckets with a
+  // shift name (`slot.shift`), draw one segmented series per shift. Comparison
+  // wins if both somehow arrive (they are mutually exclusive on the request).
+  const shiftDataOn =
+    !comparisonOn &&
+    shiftsConfigured &&
+    data.some((d) => Array.isArray(d.slots) &&
+      d.slots.some((s) => typeof s.shift === 'string' && s.shift.length > 0));
+  // Sub-daily shifts (minute/hourly) are contiguous time-of-day blocks, so we
+  // bridge segment boundaries; at Daily+ each shift stays its own line.
+  const shiftSubDaily = ['minute', 'hourly'].includes(effectivePeriodicity.toLowerCase());
   const deviationPattern: DeviationPattern =
     timeConfig?.deviationPattern === 'red-up-positive' ? 'red-up-positive' : 'green-up-positive';
   // Per-source overrides only apply when "Advanced Settings → per-source
@@ -1227,6 +1373,38 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
             </div>
           ),
         };
+      }
+
+      // Shift Mode render path — one segmented series per shift, drawn through
+      // the SDK's ComboLineChart `shift` contract (columns stay columns, lines
+      // stay lines via each series' seriesType). Mutually exclusive with
+      // comparison. Guarded so a bad data shape falls through to the normal chart.
+      if (shiftDataOn) {
+        try {
+          const built = buildChartShift(
+            chart, ci, data, cfgShifts, enabledShiftIds, shiftSubDaily, toggleShift,
+          );
+          if (built) {
+            return {
+              id: chart._id || `chart-${ci}`,
+              label: tabLabel,
+              type: chartTabType,
+              children: (
+                <ComboLineChart
+                  bare
+                  categories={built.categories}
+                  shift={built.shift}
+                  showDataLabels={showDataLabels}
+                  yAxisUnit={config.style.yAxisUnit || undefined}
+                  scrollable={scrollable}
+                  onChartReady={(instance: unknown) => { chartRef.current = instance; }}
+                />
+              ),
+            };
+          }
+        } catch (err) {
+          console.error('[Shift] render failed — falling back to the normal chart', err);
+        }
       }
 
       // Comparison Mode render path — current vs prior-period overlay with the
