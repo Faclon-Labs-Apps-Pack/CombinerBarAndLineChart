@@ -188,6 +188,14 @@ function nextFinerPeriodicity(p: Periodicity): Periodicity {
   return idx < LEVEL_ORDER.length - 1 ? LEVEL_ORDER[idx + 1] : p;
 }
 
+// The coarsest (highest-order) periodicity present in `list`. LEVEL_ORDER runs
+// coarsest → finest (Monthly … Hourly), so the first match is the highest-order
+// option — used as the local picker's default so a window opens at e.g. Daily,
+// not Hourly, when both are available.
+function coarsestAvailable(list: Periodicity[]): Periodicity | undefined {
+  return LEVEL_ORDER.find((p) => list.includes(p));
+}
+
 function fontWeightToCss(weight: WidgetFontWeight): number {
   switch (weight) {
     case 'Regular':
@@ -729,6 +737,9 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   // picker shows a "Shift" toggle.
   const shiftsConfigured = (timeConfig?.shifts?.length ?? 0) > 0;
   const [shiftOn, setShiftOn] = useState(false);
+  // Mirrors shiftOn so the Shift toggle handler can emit a TIME_CHANGE before its
+  // setState flushes (same trick as compRangeRef for the Compare toggle).
+  const shiftOnRef = useRef(false);
   // Latest main range, kept in a ref so the Compare callback (which fires
   // separately from the main onRangeChange on Apply) always pairs with the
   // current main window instead of a stale render's `range` state.
@@ -744,7 +755,14 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     timeConfig?.allDurations?.find((d) => d.id === preset) ??
     (timeConfig?.pickerType === 'fixed' ? timeConfig.fixedDuration : undefined);
   const availablePeriodicities = durationPeriodicities(selectedDuration, range);
-  const [basePeriodicity, setBasePeriodicity] = useState<Periodicity>(() => periodicityFromConfig(timeConfig));
+  const [basePeriodicity, setBasePeriodicity] = useState<Periodicity>(() => {
+    const configured = periodicityFromConfig(timeConfig);
+    const localPicker =
+      (timeConfig?.pickerType ?? (timeConfig?.type as TimeConfig['pickerType']) ?? 'local') === 'local';
+    // Local picker opens at the coarsest (highest-order) available periodicity —
+    // e.g. Daily, not Hourly, when both are offered. Fixed/global stay config-driven.
+    return localPicker ? (coarsestAvailable(availablePeriodicities) ?? configured) : configured;
+  });
   const [drillPath, setDrillPath] = useState<DrillEntry[]>([]);
 
   // Settings / Export menus: the SDK DropdownMenu is itself the single menu
@@ -848,7 +866,10 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     setRange(init.range);
     setPreset(init.presetId);
     setPresetLabel(init.presetLabel);
-    setBasePeriodicity(periodicityFromConfig(timeConfig));
+    // Fixed/global periodicity is config-driven; the local picker re-defaults to
+    // the coarsest available window via the range effect below, so don't clobber
+    // its selection here.
+    if (pickerType !== 'local') setBasePeriodicity(periodicityFromConfig(timeConfig));
     setDrillPath([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -873,12 +894,15 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     // the configured value and make the duration chip show the wrong cadence.
     if (pickerType !== 'local') return;
     if (!availablePeriodicities.includes(basePeriodicity)) {
-      const next = availablePeriodicities[0];
-      setBasePeriodicity(next);
+      // Snap to the coarsest (highest-order) available periodicity, not the
+      // finest — a window re-defaults to e.g. Daily rather than Hourly when both
+      // exist.
+      const next = coarsestAvailable(availablePeriodicities);
       // A range/preset change may have emitted with a periodicity that's no
       // longer valid for the new duration. Re-emit at the corrected periodicity
       // so the resolved data matches what the selector now shows.
       if (next) {
+        setBasePeriodicity(next);
         emitTimeChange(range.start.getTime(), range.end.getTime(), next.toLowerCase());
       }
     }
@@ -1012,6 +1036,10 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     // Ride the latest applied comparison window (if Compare is on) so the engine
     // resolves that exact period rather than the default preceding window.
     const cr = compareOn ? compRangeRef.current : null;
+    // Ride the configured shifts + operator when the Shift toggle is on (mutually
+    // exclusive with Compare) so the engine resolves per-shift buckets. Read from
+    // the ref so the toggle handler can emit before its state flush.
+    const shiftActive = shiftOnRef.current && shiftsConfigured;
     onEvent({
       type: 'TIME_CHANGE',
       payload: {
@@ -1024,6 +1052,12 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
               comparisonEndTime:   String(cr.end.getTime()),
             }
           : {}),
+        ...(shiftActive
+          ? {
+              shifts: timeConfig?.shifts ?? [],
+              shiftAggregator: timeConfig?.shiftAggregator || 'max',
+            }
+          : {}),
       },
     });
   }
@@ -1034,7 +1068,7 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     setCompareOn(enabled);
     // Comparison and Shift are mutually exclusive — enabling one disables the
     // other (but both may be off; neither is required).
-    if (enabled) setShiftOn(false);
+    if (enabled) { setShiftOn(false); shiftOnRef.current = false; }
     if (!enabled) {
       compRangeRef.current = null;
       setCompRange(null);
@@ -1054,10 +1088,21 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   }
 
   // Shift toggle — mutually exclusive with Compare (enabling shift disables
-  // comparison; both may be off).
+  // comparison; both may be off). Emits a TIME_CHANGE so the engine (re)resolves
+  // with — or without — the shift comparison, carrying the configured `shifts`
+  // and `shiftOperator`.
   function handleShiftToggle(enabled: boolean) {
     setShiftOn(enabled);
-    if (enabled) setCompareOn(false);
+    shiftOnRef.current = enabled;
+    if (enabled) {
+      // Stand comparison down (mutually exclusive); null the ref so this emit
+      // doesn't also ride a stale comparison window.
+      setCompareOn(false);
+      setCompRange(null);
+      compRangeRef.current = null;
+    }
+    const r = rangeRef.current;
+    emitTimeChange(r.start.getTime(), r.end.getTime(), basePeriodicity.toLowerCase());
   }
 
   function handleRangeChange(r: DateRange | null) {
@@ -1143,15 +1188,13 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   // Build one switcher item per CONFIGURED chart (not just those with data), so
   // the title switcher appears whenever more than one chart exists. A chart with
   // no data source yet renders the empty state as its view.
-  // Comparison Mode (time tab) — only when the engine actually supplied a
-  // comparison window. When on, charts render through the SDK's comparison
-  // pipeline (current + dashed comparison series + ▲/▼ deviation tooltip).
-  // The time-tab Comparison Mode is the master switch; the picker's Compare
-  // toggle only selects the comparison RANGE, so it does NOT gate rendering here
-  // (gating on it made the overlay/tooltip silently disappear when out of sync).
-  // Shift mode is mutually exclusive — when Shift is on, comparison stands down.
+  // Comparison render is driven purely by the DATA: whenever the engine returned
+  // comparison-window buckets (`comparisonSlots`) for any entry, charts render
+  // through the SDK's comparison pipeline (current + dashed comparison series +
+  // ▲/▼ deviation tooltip). We deliberately do NOT gate on the time-tab
+  // Comparison Mode flag or the picker's Compare/Shift toggles — if the data
+  // carries a comparison window, we show it.
   const comparisonOn =
-    comparisonModeOn && !shiftOn &&
     data.some((d) => Array.isArray(d.comparisonSlots) && d.comparisonSlots.length > 0);
   const deviationPattern: DeviationPattern =
     timeConfig?.deviationPattern === 'red-up-positive' ? 'red-up-positive' : 'green-up-positive';
@@ -1335,7 +1378,12 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
             {periodicityOpen && (
               <DropdownMenu>
                 <ActionListItemGroup>
-                  {availablePeriodicities.map((p) => (
+                  {/* Always list options coarsest → finest (Monthly, Weekly,
+                      Daily, Hourly) regardless of how availablePeriodicities is
+                      ordered. LEVEL_ORDER already encodes that descending order. */}
+                  {[...availablePeriodicities]
+                    .sort((a, b) => LEVEL_ORDER.indexOf(a) - LEVEL_ORDER.indexOf(b))
+                    .map((p) => (
                     <ActionListItem
                       key={p}
                       title={p}

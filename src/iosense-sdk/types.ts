@@ -163,6 +163,12 @@ export type WidgetEvent =
         // Set only when the date picker's Compare mode is enabled and applied.
         comparisonStartTime?: string;
         comparisonEndTime?: string;
+        // Set only when the date picker's Shift toggle is enabled. `shifts` is the
+        // configured shift windows (sent verbatim); `shiftAggregator` is how a bucket
+        // spanning multiple shifts is rolled up (default "max"). Mutually exclusive
+        // with the comparison fields.
+        shifts?: TimeConfig['shifts'];
+        shiftAggregator?: string;
       };
     }
   | { type: 'FILTER_CHANGE'; payload: Record<string, unknown> };
