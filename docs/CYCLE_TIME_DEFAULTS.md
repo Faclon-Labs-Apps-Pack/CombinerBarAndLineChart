@@ -2,7 +2,7 @@
 
 Pre-fills the **Cycle Time** form (in the Time tab) with sensible "start of calendar period" defaults so it never renders blank — for both the **Local** and **Fixed** pickers. Drop-in for the Column Chart (or any widget using the SDK `TimeTabConfiguration`).
 
-All code lives in the **configurator** (e.g. `CombinerBarLineChartConfiguration.tsx`).
+All code lives in the **configurator** (e.g. `CombinedBarLineChartConfiguration.tsx`).
 
 ---
 

@@ -8,7 +8,8 @@ import { IconButton } from '@faclon-labs/design-sdk/IconButton';
 import { Modal, ModalHeader, ModalBody, ModalFooter, ModalLeadingItem } from '@faclon-labs/design-sdk/Modal';
 import { TimeTabConfiguration } from '@faclon-labs/design-sdk/TimeTabConfiguration';
 import type { TimeTabUIConfig, TimeTabConfigurationProps } from '@faclon-labs/design-sdk/TimeTabConfiguration';
-import { UNSPathInput } from '@faclon-labs/design-sdk/UNSPathInput';
+import { UNSTreePicker } from '@faclon-labs/design-sdk/UNSTreePicker';
+import type { UNSWorkspace, UNSNode } from '@faclon-labs/design-sdk/UNSTreePicker';
 import { SelectInput } from '@faclon-labs/design-sdk/SelectInput';
 import { DropdownMenu, ActionListItem, ActionListItemGroup } from '@faclon-labs/design-sdk/DropdownMenu';
 import { ColorInput } from '@faclon-labs/design-sdk/ColorPicker';
@@ -42,9 +43,8 @@ import {
   Duration,
   BindingEntry,
 } from '../../iosense-sdk/types';
-import { useUNSTree } from '../../iosense-sdk/useUNSTree';
-import type { UNSTree } from '../../iosense-sdk/useUNSTree';
-import './CombinerBarLineChartConfiguration.css';
+import { useUNSTreePicker } from '../../iosense-sdk/useUNSTreePicker';
+import './CombinedBarLineChartConfiguration.css';
 
 interface CombinedBarLineChartConfigurationProps {
   config: ColumnChartEnvelope | undefined;
@@ -52,10 +52,13 @@ interface CombinedBarLineChartConfigurationProps {
   onChange: (config: ColumnChartEnvelope) => void;
   onBack?: () => void;
 
-  unsTree?: UNSTree;
-  isLoadingTree?: boolean;
-  onLoadWorkspaces?: () => void;
-  resolveUNSValue?: (rawValue: string) => string;
+  // Host-injectable UNS picker source (all-or-none). Injected by
+  // QuickConfigShell.buildProps in the IOSense host; omitted in the dev harness,
+  // where the useUNSTreePicker fallback hook supplies them from the token API.
+  unsWorkspaces?: UNSWorkspace[];
+  isLoadingWorkspaces?: boolean;
+  loadUnsChildren?: (wsId: string, parentId?: string) => Promise<UNSNode[]>;
+  searchUnsNodes?: (wsId: string, query: string, limit?: number) => Promise<UNSNode[]>;
 
   // Global Time Pickers registered in the host (Angular shell). Injected at
   // runtime and forwarded to the design-sdk TimeTabConfiguration so the user
@@ -236,19 +239,6 @@ function mapTimeTabToTimeConfig(
     shifts,
     shiftAggregator,
   };
-}
-
-// Debug helper — surfaces exactly what TimeTab emits vs what we derive.
-function logTimeConfig(ttc: TimeTabUIConfig, tc: TimeConfig) {
-  // eslint-disable-next-line no-console
-  console.log('[mapTimeTabToTimeConfig]', {
-    ttc_linkTimeWith: (ttc as { linkTimeWith?: string }).linkTimeWith,
-    ttc_cycleTime: ttc.cycleTime,
-    ttc_fixed: (ttc as { fixed?: unknown }).fixed,
-    ttc_defaultDurationId: ttc.defaultDurationId,
-    ttc_allDurations: ttc.allDurations,
-    derived: tc,
-  });
 }
 
 // Sensible "start of calendar period" defaults for the Cycle Time form so it
@@ -441,20 +431,17 @@ const EMPTY_SECTION_CHART: ChartConfig = {
 export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartConfigurationProps) {
   const { config, authentication, onChange, onBack, globalTimepickers } = props;
 
+  // Host injects workspaces + loadChildren together; if it does, use those.
+  // Otherwise fall back to the dev-harness hook (called unconditionally per the
+  // Rules of Hooks; it no-ops when the host has injected).
   const hasInjectedUNS =
-    props.unsTree !== undefined &&
-    props.onLoadWorkspaces !== undefined &&
-    props.resolveUNSValue !== undefined;
+    props.unsWorkspaces !== undefined && props.loadUnsChildren !== undefined;
 
-  const hookResult = useUNSTree(hasInjectedUNS ? undefined : authentication);
-  const unsTree         = hasInjectedUNS ? props.unsTree!              : hookResult.unsTree;
-  const isLoadingTree   = hasInjectedUNS ? (props.isLoadingTree ?? false) : hookResult.isLoadingTree;
-  const loadWorkspaces  = hasInjectedUNS ? props.onLoadWorkspaces!     : hookResult.loadWorkspaces;
-  const resolveUNSValue = hasInjectedUNS ? props.resolveUNSValue!      : hookResult.resolveUNSValue;
-
-  useEffect(() => {
-    if (authentication) loadWorkspaces();
-  }, [authentication]);
+  const hookResult = useUNSTreePicker(hasInjectedUNS ? undefined : authentication);
+  const unsWorkspaces       = hasInjectedUNS ? props.unsWorkspaces!                     : hookResult.workspaces;
+  const isLoadingWorkspaces = hasInjectedUNS ? (props.isLoadingWorkspaces ?? false)     : hookResult.isLoadingWorkspaces;
+  const loadUnsChildren     = hasInjectedUNS ? props.loadUnsChildren!                   : hookResult.loadChildren;
+  const searchUnsNodes      = hasInjectedUNS ? (props.searchUnsNodes ?? hookResult.searchNodes) : hookResult.searchNodes;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('data');
 
@@ -472,6 +459,13 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   // ── Widget-level state ────────────────────────────────────────────────────
   const [currentTimeConfig,    setCurrentTimeConfig]    = useState<TimeConfig | undefined>(config?.timeConfig);
   const [currentTimeTabConfig, setCurrentTimeTabConfig] = useState<Record<string, unknown> | undefined>(config?.timeTabConfig);
+  // TimeTabConfiguration's `value` prop is a rehydration SEED ("restores a
+  // saved config"), not a controlled value — passing its own onChange output
+  // back in resets its internal UI state (open side popups like Edit Duration)
+  // on every toggle. The seed is therefore only (re)set on events that can't
+  // have a popup open: initial mount, widget switch, and entering the Time tab.
+  // It is never reset from echoes of what the time tab itself just emitted.
+  const [timeTabSeed, setTimeTabSeed] = useState<Record<string, unknown> | undefined>(config?.timeTabConfig);
   const [title,          setTitle]          = useState(config?.uiConfig?.title ?? '');
   const [description,    setDescription]    = useState(config?.uiConfig?.description ?? '');
   const [titleTouched,   setTitleTouched]   = useState(false);
@@ -542,7 +536,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   const [formColor,    setFormColor]    = useState('');
   const [formUnit,      setFormUnit]      = useState('');
   const [formPrecision, setFormPrecision] = useState('');
-  // Bar+line: per-series render type (Combiner-specific).
+  // Bar+line: per-series render type (Combined-specific).
   const [formChartType,     setFormChartType]     = useState<'Column' | 'Line'>('Column');
   const [formChartTypeOpen, setFormChartTypeOpen] = useState(false);
   const [formValue,    setFormValue]    = useState('');
@@ -621,6 +615,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
       setAdvancedTitleWeightOpen(false);
       setCurrentTimeConfig(config.timeConfig);
       setCurrentTimeTabConfig(config.timeTabConfig);
+      setTimeTabSeed(config.timeTabConfig);
     }
   }, [config?._id]);
 
@@ -629,8 +624,73 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   }, [config?.timeConfig]);
 
   useEffect(() => {
-    if (config?.timeTabConfig !== undefined) setCurrentTimeTabConfig(config.timeTabConfig);
+    if (config?.timeTabConfig !== undefined) {
+      // Track the latest committed time config, but DO NOT reseed the TimeTab
+      // here. `TimeTabConfiguration.value` is a rehydration SEED — changing its
+      // identity makes the SDK re-hydrate and CLOSE any open side popup (e.g.
+      // Edit/Add Duration). Every keystroke/checkbox we emit bounces back
+      // through the host's update() as a new `config` object, and on the
+      // iosense host the echoed timeTabConfig isn't byte-identical to what we
+      // emitted (the platform normalises/augments it), so no content guard can
+      // reliably tell "our own echo" from a real change. Reseeding mid-edit
+      // only ever destroys the user's in-progress edits and closes the popup,
+      // so we don't do it. The seed is (re)hydrated where it's actually safe:
+      // initial mount (useState initializer), widget switch (config._id effect),
+      // and entering the Time tab (Tabs.onValueChange) — none of which can have
+      // a popup open.
+      setCurrentTimeTabConfig(config.timeTabConfig);
+    }
   }, [config?.timeTabConfig]);
+
+  // Workaround for a design-sdk (>= 0.7.7) regression that closes the
+  // TimeTabConfiguration side modals (Add/Edit Duration, Add Shift) the instant
+  // you interact with a pop-out surface inside them. The Periodicity multi-select
+  // (Daily/Weekly/Monthly… checkboxes), the Start/End Hour + Minute `SelectInput`
+  // dropdowns (`.fds-select-input__popover`) and the shift-color `ColorInput`
+  // picker (`.fds-color-input__popover`) all render their popover in a portal
+  // ATTACHED TO <body>, OUTSIDE the modal's `.fds-modal__backdrop`. The modal's
+  // document-level outside-pointer-down listener then treats a click on a
+  // dropdown option / periodicity checkbox / color swatch as a click OUTSIDE the
+  // modal and dismisses the whole modal — so unchecking "Weekly" closes the
+  // Duration modal. (Worked in 0.7.3, where these popovers stayed within the
+  // modal.)
+  //
+  // Fix: attach a BUBBLE-phase stopPropagation boundary on each popover element
+  // as it is portaled in. The popover's own handlers (option/checkbox toggle,
+  // color drag, sliders) run first during the target/bubble phase; the event is
+  // then stopped at the popover boundary before it can bubble up to the modal's
+  // document-level listener. This keeps the modal open WITHOUT breaking any
+  // in-popover interaction (unlike a document-capture guard, which would swallow
+  // the color canvas's own pointerdown). Only pointer/mouse-DOWN is stopped —
+  // the modal's outside-click detection fires on those, while option/checkbox
+  // selection dispatches on `click`, which must still reach the SDK's delegated
+  // handler. A MutationObserver wires up popovers created after mount. Remove
+  // once the SDK ships a fix.
+  useEffect(() => {
+    const SELECTORS = ['.fds-select-input__popover', '.fds-color-input__popover', '.fds-uns-tree-picker__popover'];
+    const EVENTS: Array<keyof DocumentEventMap> = ['pointerdown', 'mousedown'];
+    const stop = (e: Event) => e.stopPropagation();
+    const attach = (el: Element) => {
+      if ((el as { __cblPopoverGuard?: boolean }).__cblPopoverGuard) return;
+      (el as { __cblPopoverGuard?: boolean }).__cblPopoverGuard = true;
+      EVENTS.forEach((ev) => el.addEventListener(ev, stop));
+    };
+    const scan = (root: ParentNode) =>
+      SELECTORS.forEach((sel) => root.querySelectorAll?.(sel).forEach(attach));
+    scan(document);
+    const obs = new MutationObserver((muts) => {
+      muts.forEach((m) =>
+        m.addedNodes.forEach((n) => {
+          if (n.nodeType !== 1) return;
+          const el = n as Element;
+          if (SELECTORS.some((sel) => el.matches?.(sel))) attach(el);
+          scan(el);
+        }),
+      );
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, []);
 
   // ── Builders ──────────────────────────────────────────────────────────────
 
@@ -1187,6 +1247,20 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     const ttc    = withCycleDefaults(ttcRawInput as unknown as Record<string, unknown>) as unknown as TimeTabUIConfig;
     const tc     = mapTimeTabToTimeConfig(ttc, globalTimepickers);
     const ttcRaw = ttc as unknown as Record<string, unknown>;
+    // When the user links time to something OTHER than a Global Time Picker
+    // (local / fixed), drop the now-stale `global` scope from the raw TimeTab
+    // state before it's persisted. The design-sdk TimeTab leaves the previous
+    // `global` object in place when you switch away, and the Lens host keys off
+    // that `global` (globalTimepickerId) to keep the widget subscribed to the
+    // GTP — so a leftover key means the widget keeps listening to the GTP even
+    // after switching to Local. Removing it makes the persisted widget object
+    // reflect the actual link type.
+    const rawPicker = (ttcRaw.linkTimeWith ?? ttcRaw.timeType ?? 'local') as string;
+    if (rawPicker !== 'global') {
+      delete ttcRaw.global;
+      delete ttcRaw.globalTimepickerId;
+      delete ttcRaw.globalTimepickerName;
+    }
     // TimeTabConfiguration fires onChange on mount (it normalizes + echoes its
     // value). That happens every time the user merely switches INTO the Time
     // tab — nothing actually changed. Drop the echo so we don't re-resolve data
@@ -1195,7 +1269,6 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
       JSON.stringify(tc)     === JSON.stringify(currentTimeConfig) &&
       JSON.stringify(ttcRaw) === JSON.stringify(currentTimeTabConfig);
     if (isEcho) return;
-    logTimeConfig(ttc, tc);
     setCurrentTimeConfig(tc);
     setCurrentTimeTabConfig(ttcRaw);
     emit({}, { timeConfig: tc, timeTabConfig: ttcRaw });
@@ -1223,6 +1296,14 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
       sources: c.series.map((s, si) => ({ id: s._id, name: s.label || `Series ${si + 1}` })),
     })),
     [chartsList],
+  );
+
+  // Memoised so unrelated re-renders keep the seed's object identity stable —
+  // TimeTabConfiguration rehydrates (closing any open side popup, e.g. Edit
+  // Duration) whenever its `value` identity changes.
+  const timeTabSeedValue = useMemo(
+    () => withCycleDefaults(timeTabSeed) as Partial<TimeTabUIConfig> | undefined,
+    [timeTabSeed],
   );
 
   // When per-source indicators (Advance Settings) are on, the chart-wide
@@ -1271,7 +1352,13 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
       <Tabs
         variant="Bordered"
         value={activeTab}
-        onValueChange={(v) => setActiveTab(v as ActiveTab)}
+        onValueChange={(v) => {
+          // Entering the Time tab (re)mounts TimeTabConfiguration, so refresh
+          // its rehydration seed to the latest emitted state here — the popup
+          // can't be open yet, so this reseed never closes anything.
+          if (v === 'time') setTimeTabSeed(currentTimeTabConfig);
+          setActiveTab(v as ActiveTab);
+        }}
         isFullWidthTabItem
       >
         <TabItem value="data"  label="Data"  />
@@ -1582,7 +1669,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
           <div className={`cc-config__time-tab${perSourceActive ? ' cc-config__time-tab--per-source' : ''}`}>
             <TimeTabConfiguration
               onChange={handleTimeChange}
-              value={withCycleDefaults(currentTimeTabConfig) as Partial<TimeTabUIConfig> | undefined}
+              value={timeTabSeedValue}
               globalTimepickers={globalTimepickers}
               charts={gtpCharts}
             />
@@ -1935,15 +2022,16 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   <InputFieldHeader label="Color" necessityIndicator="required" />
                   <ColorInput value={formColor} onChange={(v) => setFormColor(v)} />
                 </div>
-                <UNSPathInput
+                <UNSTreePicker
                   label="UNS Path"
                   necessityIndicator="required"
-                  placeholder="Type / to browse UNS or paste {{topic}}"
+                  placeholder="Enter UNS Path"
                   value={formUnsPath}
-                  tree={unsTree}
-                  isLoading={isLoadingTree}
-                  onChange={(v: string) => setFormUnsPath(resolveUNSValue(v))}
-                  onOpen={() => loadWorkspaces()}
+                  workspaces={unsWorkspaces}
+                  isLoadingWorkspaces={isLoadingWorkspaces}
+                  loadChildren={loadUnsChildren}
+                  searchNodes={searchUnsNodes}
+                  onChange={(value: string) => setFormUnsPath(value)}
                 />
                 {modalSection === 'series' && (
                   <div className="cc-series-modal__two-col">
@@ -1958,7 +2046,21 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                 {/* 1. Identity */}
                 <TextInput label="Label" necessityIndicator="required" isRequired placeholder="e.g. Target" value={formLabel} onChange={({ value }) => setFormLabel(value)} />
                 {/* 2. Data */}
-                <UNSPathInput label="Value" placeholder="Type a number or / to bind" value={formValue} tree={unsTree} isLoading={isLoadingTree} onChange={(v: string) => setFormValue(resolveUNSValue(v))} onOpen={() => loadWorkspaces()} />
+                {/* design-sdk 0.7.17 `allowFreeValue`: type a number directly, or
+                    type a leading `/` to flip into the UNS picker — one field
+                    handles both, replacing the Static/UNS toggle this used before
+                    the prop existed. The save handler coerces via VARIABLE_REGEX. */}
+                <UNSTreePicker
+                  label="Value"
+                  placeholder="Type a number or / to bind"
+                  value={formValue}
+                  allowFreeValue
+                  workspaces={unsWorkspaces}
+                  isLoadingWorkspaces={isLoadingWorkspaces}
+                  loadChildren={loadUnsChildren}
+                  searchNodes={searchUnsNodes}
+                  onChange={(value: string) => setFormValue(value)}
+                />
                 {/* 3. Color */}
                 <div>
                   <InputFieldHeader label="Color" necessityIndicator="required" />
@@ -2063,9 +2165,11 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   <InputFieldHeader label="Color" necessityIndicator="required" />
                   <ColorInput value={formColor} onChange={(v) => setFormColor(v)} />
                 </div>
+                {/* allowFreeValue (design-sdk 0.7.17): type a number or / to
+                    bind a UNS topic — one hybrid field per bound, no toggle. */}
                 <div className="cc-series-modal__two-col">
-                  <UNSPathInput label="Start value" necessityIndicator="required" isRequired placeholder="Start value" value={formFrom} tree={unsTree} isLoading={isLoadingTree} onChange={(v: string) => setFormFrom(resolveUNSValue(v))} onOpen={() => loadWorkspaces()} />
-                  <UNSPathInput label="End value"   necessityIndicator="required" isRequired placeholder="End value"   value={formTo}   tree={unsTree} isLoading={isLoadingTree} onChange={(v: string) => setFormTo(resolveUNSValue(v))}   onOpen={() => loadWorkspaces()} />
+                  <UNSTreePicker label="Start value" necessityIndicator="required" isRequired placeholder="Value or / to bind" value={formFrom} allowFreeValue workspaces={unsWorkspaces} isLoadingWorkspaces={isLoadingWorkspaces} loadChildren={loadUnsChildren} searchNodes={searchUnsNodes} onChange={(value: string) => setFormFrom(value)} />
+                  <UNSTreePicker label="End value"   necessityIndicator="required" isRequired placeholder="Value or / to bind" value={formTo}   allowFreeValue workspaces={unsWorkspaces} isLoadingWorkspaces={isLoadingWorkspaces} loadChildren={loadUnsChildren} searchNodes={searchUnsNodes} onChange={(value: string) => setFormTo(value)} />
                 </div>
                 {/* Axis (only when a Right axis exists) */}
                 {plotAxisRadio}

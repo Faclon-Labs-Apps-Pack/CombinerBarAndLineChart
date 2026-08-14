@@ -37,7 +37,7 @@ interface AxisConfig {
 
 ## 3. Core helpers (configurator)
 
-File: `src/components/CombinerBarLineChartConfiguration/CombinerBarLineChartConfiguration.tsx`
+File: `src/components/CombinedBarLineChartConfiguration/CombinedBarLineChartConfiguration.tsx`
 
 | Helper | Purpose |
 |---|---|
@@ -96,7 +96,7 @@ File: `src/components/CombinerBarLineChartConfiguration/CombinerBarLineChartConf
 
 ## 7. Widget rendering
 
-File: `src/components/CombinerBarLineChart/CombinerBarLineChart.tsx` (`buildChartDisplayData`)
+File: `src/components/CombinedBarLineChart/CombinedBarLineChart.tsx` (`buildChartDisplayData`)
 
 - The Highcharts `yAxis` array is built as `[ leftEntry, ...(rightAxisExists ? [rightEntry] : []) ]`.
 - **Auto-hide:** each entry gets `visible: <axis has ≥1 series>`:
@@ -135,7 +135,7 @@ File: `src/components/CombinerBarLineChart/CombinerBarLineChart.tsx` (`buildChar
 ## 9. Key file references
 
 - **Types:** `src/iosense-sdk/types.ts` — `AxisConfig`, `LEFT_AXIS_ID`/`RIGHT_AXIS_ID`, `series.yAxis`, `PlotLineConfig.yAxis`, `PlotBandConfig.yAxis`.
-- **Configurator helpers:** `CombinerBarLineChartConfiguration.tsx` — `makeLeftAxis`, `rightIdsOf`, `syncAxes`, `normalizeChart`, `removeSeriesEverywhere`, `deleteRightAxis`.
+- **Configurator helpers:** `CombinedBarLineChartConfiguration.tsx` — `makeLeftAxis`, `rightIdsOf`, `syncAxes`, `normalizeChart`, `removeSeriesEverywhere`, `deleteRightAxis`.
 - **Axis UI + modal:** same file — the "Axis" `ProductAccordionItem`, `openAddAxisModal`/`openEditAxisModal`, the `modalSection === 'axis'` body + save branch.
 - **Plot-line/band axis radio:** same file — `plotAxisRadio` (gated on `plotRightAxisExists`).
-- **Widget render:** `CombinerBarLineChart.tsx` — `buildChartDisplayData` (yAxis array, auto-hide flags, plot line/band routing).
+- **Widget render:** `CombinedBarLineChart.tsx` — `buildChartDisplayData` (yAxis array, auto-hide flags, plot line/band routing).

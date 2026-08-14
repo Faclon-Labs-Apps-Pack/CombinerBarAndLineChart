@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { CombinedBarLineChart } from './components/CombinerBarLineChart/CombinerBarLineChart';
-import { CombinedBarLineChartConfiguration } from './components/CombinerBarLineChartConfiguration/CombinerBarLineChartConfiguration';
+import { CombinedBarLineChart } from './components/CombinedBarLineChart/CombinedBarLineChart';
+import { CombinedBarLineChartConfiguration } from './components/CombinedBarLineChartConfiguration/CombinedBarLineChartConfiguration';
 import { ColumnChartEnvelope, DataEntry, WidgetEvent, TimeConfig, TimeWindow, Duration } from './iosense-sdk/types';
 import { validateSSOToken } from './iosense-sdk/api';
 import { resolve } from './iosense-sdk/mini-engine';
@@ -40,7 +40,7 @@ const MOCK_GTPS: NonNullable<TimeTabConfigurationProps['globalTimepickers']> = [
       minute: '00',
       dayOfWeek: 1,        // Monday
       date: '1',
-      month: '4',          // financial year begins in April
+      month: 4,            // financial year begins in April
       year: '',
     },
     shifts: [

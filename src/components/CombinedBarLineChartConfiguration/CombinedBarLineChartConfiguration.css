@@ -188,19 +188,15 @@
   word-break: break-word;
 }
 
-/* Section body inside Accordion items */
+/* Section body inside Accordion items — the SDK accordion body ships with no
+   inset, so pad it to the standard 16px gutter matching the other panels. */
 .cc-config__section {
   width: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-04, 12px);
-}
-
-/* Drop the SDK accordion body's inner padding so list items sit flush within
-   every configurator accordion (Data Source, Axis, Plot Lines, Plot Bands…). */
-.cc-config .fds-pa-item__body-inner {
-  padding: 0;
+  padding: var(--spacing-05, 16px);
 }
 
 /* Delete (trash) icon buttons turn red on hover. The feather icon uses
@@ -465,11 +461,12 @@
   gap: var(--spacing-02, 6px);
 }
 
-/* The UNS dropdown renders via createPortal at document.body with z-index 100
-   (--global-z-index-dropdown). The modal backdrop sits at z-index 300
-   (--global-z-index-overlay). Force the dropdown above the modal. */
-.fds-uns-path-input__popover {
-  z-index: 500 !important;
+/* The UNSTreePicker dropdown portals to document.body at
+   --global-z-index-popover (500). The Add/Edit side modal's backdrop sits at
+   z-index 300 (--global-z-index-overlay). Force the picker popover above the
+   modal so the workspace list / node tree renders on top, not behind it. */
+.fds-uns-tree-picker__popover {
+  z-index: 10002 !important;
 }
 
 /* Dropdown menu items: the SDK sizes item content to max-content and the title

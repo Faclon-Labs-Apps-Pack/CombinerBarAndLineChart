@@ -1,6 +1,6 @@
 import { createRoot, Root } from 'react-dom/client';
 import React from 'react';
-import { CombinedBarLineChartConfiguration } from './CombinerBarLineChartConfiguration';
+import { CombinedBarLineChart } from './CombinedBarLineChart';
 import '@faclon-labs/design-sdk/styles.css';
 
 const roots = new Map<string, Root>();
@@ -18,13 +18,13 @@ function mount(containerId: string, props: any) {
 
   const root = createRoot(container);
   roots.set(containerId, root);
-  root.render(React.createElement(CombinedBarLineChartConfiguration, props));
+  root.render(React.createElement(CombinedBarLineChart, props));
 }
 
 function update(containerId: string, props: any) {
   const root = roots.get(containerId);
   if (!root) return;
-  root.render(React.createElement(CombinedBarLineChartConfiguration, props));
+  root.render(React.createElement(CombinedBarLineChart, props));
 }
 
 function unmount(containerId: string) {
@@ -35,4 +35,4 @@ function unmount(containerId: string) {
 }
 
 (window as any).ReactWidgets = (window as any).ReactWidgets ?? {};
-(window as any).ReactWidgets['CombinedBarLineChartConfiguration'] = { mount, update, unmount };
+(window as any).ReactWidgets['CombinedBarLineChart'] = { mount, update, unmount };

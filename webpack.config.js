@@ -6,8 +6,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const COMPONENTS = {
-  CombinedBarLineChart: './src/components/CombinerBarLineChart/index.ts',
-  CombinedBarLineChartConfiguration: './src/components/CombinerBarLineChartConfiguration/index.ts',
+  CombinedBarLineChart: './src/components/CombinedBarLineChart/index.ts',
+  CombinedBarLineChartConfiguration: './src/components/CombinedBarLineChartConfiguration/index.ts',
 };
 
 export default (env, argv) => {

@@ -10,7 +10,7 @@
     "deploy": "claude /deploy-review"
   },
   "dependencies": {
-    "@faclon-labs/design-sdk": "^0.7.8",
+    "@faclon-labs/design-sdk": "^0.7.17",
     "highcharts": "^12.6.0",
     "highcharts-react-official": "^3.2.3",
     "react": "18.2.0",
@@ -22,6 +22,7 @@
     "@babel/preset-env": "^7",
     "@babel/preset-react": "^7",
     "@babel/preset-typescript": "^7",
+    "@snehilagrahari/iosense-widget-eval-harness": "^1.0.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "babel-loader": "^9",

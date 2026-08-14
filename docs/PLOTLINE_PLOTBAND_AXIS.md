@@ -126,5 +126,5 @@ highchartsOptions.yAxis = [
 
 ## 6. Files / functions to reuse
 - Types: `PlotLineConfig.yAxis`, `PlotBandConfig.yAxis` (`src/iosense-sdk/types.ts`).
-- Configurator: `formPlotYAxis`, `plotAxisRadio` (gated on `plotRightAxisExists`), the save/edit/reset wiring, `deleteRightAxis` re-home (`CombinerBarLineChartConfiguration.tsx`).
-- Widget: `chartHasRightAxis` / `plotAxisOf`, `toHcLine`/`toHcBand`, the Left/Right group split, and the yAxis-array attach (`CombinerBarLineChart.tsx`).
+- Configurator: `formPlotYAxis`, `plotAxisRadio` (gated on `plotRightAxisExists`), the save/edit/reset wiring, `deleteRightAxis` re-home (`CombinedBarLineChartConfiguration.tsx`).
+- Widget: `chartHasRightAxis` / `plotAxisOf`, `toHcLine`/`toHcBand`, the Left/Right group split, and the yAxis-array attach (`CombinedBarLineChart.tsx`).

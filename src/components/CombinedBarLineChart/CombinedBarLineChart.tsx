@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type CSSProperties } from 'react';
+import { useState, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { ColumnChart as ColumnChartDisplay } from '@faclon-labs/design-sdk/ColumnChart';
 import { ComboLineChart } from '@faclon-labs/design-sdk/ComboLineChart';
@@ -34,7 +34,8 @@ import {
   Duration,
 } from '../../iosense-sdk/types';
 import { resolveDurationWindow } from '../../iosense-sdk/time';
-import './CombinerBarLineChart.css';
+import { getValue, getSeriesData } from '../../iosense-sdk/mini-engine';
+import './CombinedBarLineChart.css';
 
 interface CombinedBarLineChartProps {
   config?: ColumnChartUIConfig;
@@ -71,6 +72,20 @@ const ALL_PERIODICITIES: Periodicity[] = ['Hourly', 'Daily', 'Weekly', 'Monthly'
 const LEVEL_ORDER: Periodicity[] = ['Monthly', 'Weekly', 'Daily', 'Hourly'];
 
 interface DrillEntry { label: string; startTime: number; endTime: number; }
+
+// A series is "bound" when its unsPath is a `{{ }}` binding — i.e. it expects
+// data from the engine. Used to tell a true loading state (bound series, data
+// not arrived yet) apart from an unconfigured one. Mirrors LineChart/ColumnChart.
+function isBound(binding?: string): boolean {
+  return !!binding && /^\{\{.+\}\}$/.test(binding.trim());
+}
+
+// Cap the loading spinner: `data.length === 0` alone can't tell "fetch in
+// progress" from "fetch resolved empty" (both are []). If the first resolve
+// never reaches the widget (binding/routing issue) the spinner would otherwise
+// spin forever, so we fall back to the empty state after this window. When data
+// arrives later the chart renders regardless. Mirrors LineChart.
+const LOADING_TIMEOUT_MS = 15000;
 
 function getAvailablePeriodicities(range: DateRange): Periodicity[] {
   const days = (range.end.getTime() - range.start.getTime()) / 86_400_000;
@@ -125,62 +140,26 @@ function durationPeriodicities(dur: Duration | undefined, range: DateRange): Per
   return mapped.length ? mapped : getAvailablePeriodicities(range);
 }
 
-function getSeriesData(key: string, data: DataEntry[]): SeriesPayload | null {
-  const entry = data.find((d) => d.key === key);
-  if (!entry) return null;
-  // Raw API item: series fields (slots/meta/range/path) sit at the top level
-  // of the entry — this is what the engine passes through as-is.
-  if (Array.isArray(entry.slots)) {
-    return {
-      __type: 'series',
-      path: entry.path ?? '',
-      meta: entry.meta as SeriesPayload['meta'],
-      range: entry.range ?? { from: 0, to: 0 },
-      slots: entry.slots,
-    };
-  }
-  // Backward-compat: wrapped DataEntry where value is a SeriesPayload.
-  const v = entry.value;
-  if (v !== null && typeof v === 'object' && (v as SeriesPayload).__type === 'series') {
-    return v as SeriesPayload;
-  }
-  return null;
-}
-
 // Comparison-period counterpart of getSeriesData: the prior window rides INLINE
 // on the SAME data entry as `comparisonSlots` (present only when Comparison Mode
-// sent a comparison window), so we read it straight from `data` — no separate
+// sent a comparison window), passed through by getSeriesData — no separate
 // comparisonData array. Comparison-slot labels can be blank, so backfill from
 // the same-index current slot (equal bucket count) for the tooltip's "vs <date>"
 // footer. Returns null when the entry carries no comparison slots.
 function getComparisonSeriesData(key: string, data: DataEntry[]): SeriesPayload | null {
-  const entry = data.find((d) => d.key === key);
-  if (!entry || !Array.isArray(entry.comparisonSlots)) return null;
-  const slots = entry.comparisonSlots.map((s, i) => ({
+  const current = getSeriesData(key, data);
+  if (!current || !Array.isArray(current.comparisonSlots)) return null;
+  const slots = current.comparisonSlots.map((s, i) => ({
     ...s,
-    label: s.label || entry.slots?.[i]?.label || '',
+    label: s.label || current.slots[i]?.label || '',
   }));
   return {
     __type: 'series',
-    path: entry.path ?? '',
-    meta: entry.meta as SeriesPayload['meta'],
-    range: entry.range ?? { from: 0, to: 0 },
+    path: current.path,
+    meta: current.meta,
+    range: current.range,
     slots,
   };
-}
-
-function getValue(key: string, config: unknown, data: DataEntry[]): string | number | null {
-  const entry = data.find((d) => d.key === key);
-  if (entry !== undefined) {
-    // A series entry (raw slots at top level, or a wrapped SeriesPayload) is
-    // not a scalar — never coerce it through getValue.
-    if (Array.isArray(entry.slots)) return null;
-    const v = entry.value;
-    if (v !== null && typeof v === 'object') return null;
-    return (v ?? null) as string | number | null;
-  }
-  const parts = key.replace(/\[(\d+)\]/g, '.$1').split('.');
-  return parts.reduce((acc: unknown, k) => (acc as Record<string, unknown>)?.[k], config) as string | number | null;
 }
 
 function nextFinerPeriodicity(p: Periodicity): Periodicity {
@@ -194,6 +173,20 @@ function nextFinerPeriodicity(p: Periodicity): Periodicity {
 // not Hourly, when both are available.
 function coarsestAvailable(list: Periodicity[]): Periodicity | undefined {
   return LEVEL_ORDER.find((p) => list.includes(p));
+}
+
+// The periodicity to use for a duration + range: keep the current selection when
+// it's still valid, otherwise snap to the coarsest available option. Used when a
+// duration change must correct the periodicity in the SAME step as the emit, so
+// no stale-cadence fetch (e.g. Hourly for a Year window) is ever sent.
+function periodicityForDuration(
+  dur: Duration | undefined,
+  range: DateRange,
+  current: Periodicity,
+): Periodicity {
+  const options = durationPeriodicities(dur, range);
+  if (options.includes(current)) return current;
+  return coarsestAvailable(options) ?? current;
 }
 
 function fontWeightToCss(weight: WidgetFontWeight): number {
@@ -867,7 +860,16 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   const selectedDuration =
     timeConfig?.allDurations?.find((d) => d.id === preset) ??
     (timeConfig?.pickerType === 'fixed' ? timeConfig.fixedDuration : undefined);
-  const availablePeriodicities = durationPeriodicities(selectedDuration, range);
+  // Memoised so the options array keeps a stable identity between unrelated
+  // re-renders — the periodicity-sync effect below keys on it, so a fresh array
+  // every render would either thrash or (when keyed on `range` alone) miss an
+  // options change that didn't move the range. Recomputes only when the active
+  // duration definition or the resolved window actually changes.
+  const availablePeriodicities = useMemo(
+    () => durationPeriodicities(selectedDuration, range),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(selectedDuration ?? null), range.start.getTime(), range.end.getTime()],
+  );
   const [basePeriodicity, setBasePeriodicity] = useState<Periodicity>(() => {
     const configured = periodicityFromConfig(timeConfig);
     const localPicker =
@@ -877,6 +879,28 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     return localPicker ? (coarsestAvailable(availablePeriodicities) ?? configured) : configured;
   });
   const [drillPath, setDrillPath] = useState<DrillEntry[]>([]);
+
+  // ── First-load detection ──────────────────────────────────────────────────
+  // Show the loading spinner (not the empty / half-filled chart) until the first
+  // resolve arrives, whenever the chart has bound series that expect data. This
+  // mirrors LineChart: a bound-but-dataless chart reads as "still fetching", not
+  // "no data". Capped by LOADING_TIMEOUT_MS so a stuck binding can't spin forever.
+  const dataEmpty = data.length === 0;
+  const hasBoundSeries = (config.charts ?? []).some((c) =>
+    (c.series ?? []).some((s) => isBound(s.unsPath)),
+  );
+  const [loadingExpired, setLoadingExpired] = useState(false);
+  useEffect(() => {
+    if (!dataEmpty || !hasBoundSeries) {
+      setLoadingExpired(false);
+      return;
+    }
+    setLoadingExpired(false); // fresh fetch (data reference changed) → restart
+    const t = setTimeout(() => setLoadingExpired(true), LOADING_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [data, dataEmpty, hasBoundSeries]);
+  // Host `loading` flag OR an in-flight first resolve, until the cap expires.
+  const isLoadingData = !loadingExpired && (!!loading || (dataEmpty && hasBoundSeries));
 
   // Settings / Export menus: the SDK DropdownMenu is itself the single menu
   // container (not wrapped in a Popover, which would double-nest). We own the
@@ -954,11 +978,6 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
 
   const widgetTitleStyle = { ...titleStyleVars, ...cardStyleVars } as CSSProperties;
 
-  // Debug: log the `data` prop the widget receives from the engine each time it changes.
-  useEffect(() => {
-    console.log('[ColumnChart] data prop:', data);
-  }, [data]);
-
   useEffect(() => {
     setShowLegend(config.style.showLegend);
     setShowDataLabels(config.style.showDataLabels);
@@ -1006,21 +1025,22 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     // periodicity / the linked GTP), so never reset it here — that would clobber
     // the configured value and make the duration chip show the wrong cadence.
     if (pickerType !== 'local') return;
+    if (!availablePeriodicities.length) return;
     if (!availablePeriodicities.includes(basePeriodicity)) {
-      // Snap to the coarsest (highest-order) available periodicity, not the
-      // finest — a window re-defaults to e.g. Daily rather than Hourly when both
-      // exist.
+      // The selected periodicity is no longer valid for the current duration
+      // (e.g. Hourly after switching to a Year duration). Snap to the coarsest
+      // (highest-order) available option, and re-emit so the resolved data
+      // matches what the selector now shows. Keying this effect on the options
+      // array (not on `range`) is what makes the *selected value* update even
+      // when a duration change doesn't move the resolved window.
       const next = coarsestAvailable(availablePeriodicities);
-      // A range/preset change may have emitted with a periodicity that's no
-      // longer valid for the new duration. Re-emit at the corrected periodicity
-      // so the resolved data matches what the selector now shows.
-      if (next) {
+      if (next && next !== basePeriodicity) {
         setBasePeriodicity(next);
         emitTimeChange(range.start.getTime(), range.end.getTime(), next.toLowerCase());
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range]);
+  }, [availablePeriodicities]);
 
   // ── Empty / loading / error states ─────────────────────────────────────────
   // Priority order matters: a hard error wins over everything; an unconfigured
@@ -1106,10 +1126,11 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     );
   }
 
-  // 4. Loading — bindings exist, the first resolve hasn't completed yet. Only
-  //    shown while the host reports loading, so an empty result falls through
-  //    to "Data not available" rather than spinning forever.
-  if (loading) {
+  // 4. Loading — bound series exist and the first resolve hasn't arrived yet (or
+  //    the host reports loading). Shows the spinner instead of the empty state or
+  //    a half-filled chart, capped by LOADING_TIMEOUT_MS so an empty result
+  //    eventually falls through to "Data not available" rather than spinning forever.
+  if (isLoadingData) {
     return (
       <div className="cc-widget cc-widget--loading">
         <Spinner size="XLarge" label="Loading chart data…" labelPosition="Bottom" />
@@ -1274,7 +1295,12 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
         rangeRef.current = { start, end };
         setRange({ start, end });
         setDrillPath([]);
-        emitTimeChange(startMs, endMs, basePeriodicity.toLowerCase());
+        // Built-in preset: no configured duration, so options derive from the
+        // resolved window. Snap the periodicity to a valid option before emitting
+        // so we never fetch at a cadence the new window doesn't support.
+        const bp = periodicityForDuration(undefined, { start, end }, basePeriodicity);
+        if (bp !== basePeriodicity) setBasePeriodicity(bp);
+        emitTimeChange(startMs, endMs, bp.toLowerCase());
       }
       return;
     }
@@ -1282,12 +1308,18 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
     const { startTime, endTime } = resolveDurationWindow(dur, Date.now(), timeConfig?.cycleTime);
     // rangeRef holds the applied window; handleRangeChange ignores the picker's
     // echo for the same window, so the selected preset/label survives Apply.
-    rangeRef.current = { start: new Date(startTime), end: new Date(endTime) };
-    setRange({ start: new Date(startTime), end: new Date(endTime) });
+    const durRange = { start: new Date(startTime), end: new Date(endTime) };
+    rangeRef.current = durRange;
+    setRange(durRange);
     setPreset(dur.id);
     setPresetLabel(dur.label || dur.id);
     setDrillPath([]);
-    emitTimeChange(startTime, endTime, basePeriodicity.toLowerCase());
+    // Snap the periodicity to one the new duration actually offers (e.g. switching
+    // to a Year duration drops Hourly → Monthly) and emit with the corrected value
+    // so the selector and the fetched data agree from the first render.
+    const p = periodicityForDuration(dur, durRange, basePeriodicity);
+    if (p !== basePeriodicity) setBasePeriodicity(p);
+    emitTimeChange(startTime, endTime, p.toLowerCase());
   }
 
   function handlePeriodicityChange(p: Periodicity) {
@@ -1402,8 +1434,8 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
               ),
             };
           }
-        } catch (err) {
-          console.error('[Shift] render failed — falling back to the normal chart', err);
+        } catch {
+          // Shift render failed — fall through to the normal chart below.
         }
       }
 
@@ -1437,8 +1469,8 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
               ),
             };
           }
-        } catch (err) {
-          console.error('[Comparison] render failed — falling back to the normal chart', err);
+        } catch {
+          // Comparison render failed — fall through to the normal chart below.
         }
       }
 

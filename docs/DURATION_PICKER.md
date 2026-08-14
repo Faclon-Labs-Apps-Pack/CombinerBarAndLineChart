@@ -2,7 +2,7 @@
 
 How the local date-range picker fetches **all durations** (the SDK's built-in presets **plus** the user's configured durations) and resolves the **default periodicity** for each. Drop-in guide for the Column Chart (or any widget using the SDK `DatePicker`).
 
-All widget code lives in the chart component (e.g. `CombinerBarLineChart.tsx`); the data-signature bit lives in the dev harness `App.tsx`.
+All widget code lives in the chart component (e.g. `CombinedBarLineChart.tsx`); the data-signature bit lives in the dev harness `App.tsx`.
 
 ---
 

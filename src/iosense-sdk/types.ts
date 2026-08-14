@@ -41,6 +41,9 @@ export interface SeriesPayload {
   meta: SeriesMeta;
   range: { from: number; to: number };
   slots: SeriesSlot[];
+  // Comparison-period buckets, passed through from DataEntry.comparisonSlots
+  // when Comparison Mode resolved a prior window. Same index alignment as slots.
+  comparisonSlots?: SeriesSlot[];
 }
 
 export interface ScalarBinding { key: string; topic: string; }

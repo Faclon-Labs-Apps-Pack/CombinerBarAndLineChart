@@ -289,6 +289,7 @@ export function getSeriesData(key: string, data: DataEntry[]): SeriesPayload | n
       meta: entry.meta as SeriesPayload['meta'],
       range: entry.range ?? { from: 0, to: 0 },
       slots: entry.slots,
+      ...(Array.isArray(entry.comparisonSlots) ? { comparisonSlots: entry.comparisonSlots } : {}),
     };
   }
   // Backward-compat: wrapped DataEntry where value is a SeriesPayload.
@@ -297,6 +298,23 @@ export function getSeriesData(key: string, data: DataEntry[]): SeriesPayload | n
     return v as SeriesPayload;
   }
   return null;
+}
+
+// Scalar read-helper counterpart of getSeriesData: resolves a binding key to
+// its scalar value, falling back to a dot/bracket path lookup into the config
+// for keys that were never bound (e.g. static uiConfig values).
+export function getValue(key: string, config: unknown, data: DataEntry[]): string | number | null {
+  const entry = data.find((d) => d.key === key);
+  if (entry !== undefined) {
+    // A series entry (raw slots at top level, or a wrapped SeriesPayload) is
+    // not a scalar — never coerce it through getValue.
+    if (Array.isArray(entry.slots)) return null;
+    const v = entry.value;
+    if (v !== null && typeof v === 'object') return null;
+    return (v ?? null) as string | number | null;
+  }
+  const parts = key.replace(/\[(\d+)\]/g, '.$1').split('.');
+  return parts.reduce((acc: unknown, k) => (acc as Record<string, unknown>)?.[k], config) as string | number | null;
 }
 
 // Resolve the configured "default duration" of a time config to a window.

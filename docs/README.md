@@ -42,7 +42,7 @@ Reference docs for the three reusable features built into this widget, written s
 
 ## Source files
 - Types: `src/iosense-sdk/types.ts`
-- Configurator: `src/components/CombinerBarLineChartConfiguration/CombinerBarLineChartConfiguration.tsx`
-- Widget: `src/components/CombinerBarLineChart/CombinerBarLineChart.tsx`
+- Configurator: `src/components/CombinedBarLineChartConfiguration/CombinedBarLineChartConfiguration.tsx`
+- Widget: `src/components/CombinedBarLineChart/CombinedBarLineChart.tsx`
 - Engine (dev): `src/iosense-sdk/mini-engine.ts`
 - Dev harness: `src/App.tsx`
