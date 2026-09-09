@@ -5,6 +5,7 @@ import { Switch } from '@faclon-labs/design-sdk/Switch';
 import { TextInput } from '@faclon-labs/design-sdk/TextInput';
 import { Button } from '@faclon-labs/design-sdk/Button';
 import { IconButton } from '@faclon-labs/design-sdk/IconButton';
+import { Tooltip } from '@faclon-labs/design-sdk/Tooltip';
 import { Modal, ModalHeader, ModalBody, ModalFooter, ModalLeadingItem } from '@faclon-labs/design-sdk/Modal';
 import { TimeTabConfiguration } from '@faclon-labs/design-sdk/TimeTabConfiguration';
 import type { TimeTabUIConfig, TimeTabConfigurationProps } from '@faclon-labs/design-sdk/TimeTabConfiguration';
@@ -67,6 +68,19 @@ interface CombinedBarLineChartConfigurationProps {
 }
 
 const VARIABLE_REGEX = /^\{\{(.+)\}\}$/;
+
+// Sanitizers that keep a configurator number field non-negative: they strip a
+// leading minus (and any other non-numeric characters), so no number input can
+// ever hold a negative value. `nonNegIntStr` is for whole numbers;
+// `nonNegDecimalStr` keeps a single decimal point for fractional values.
+function nonNegIntStr(raw: string): string {
+  return raw.replace(/[^\d]/g, '');
+}
+function nonNegDecimalStr(raw: string): string {
+  const cleaned = raw.replace(/[^\d.]/g, '');
+  const dot = cleaned.indexOf('.');
+  return dot === -1 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
+}
 const WIDGET_SIZE_PRESETS: Record<'Small' | 'Medium' | 'Large', { width: number; height: number }> = {
   Small:  { width: 400, height: 300 },
   Medium: { width: 600, height: 400 },
@@ -81,7 +95,6 @@ const DEFAULT_ADVANCED_SETTINGS: WidgetAdvancedSettingsConfig = {
   xAxisTextColor: '#1A1A1A',
   xAxisLineColor: '#333333',
   yAxisTextColor: '#1A1A1A',
-  yAxisLineColor: '#333333',
   gridLineColor: '#CCCCCC',
   legendTextColor: '#1A1A1A',
 };
@@ -164,7 +177,7 @@ function mapTimeTabToTimeConfig(
   // for the active picker: fixed → ttc.fixed, global → ttc.global, local → top.
   type DevPattern = 'green-up-positive' | 'red-up-positive';
   const cmpScope = (picker === 'fixed' ? ttc.fixed : picker === 'global' ? ttc.global : ttc) as
-    | { comparisonMode?: boolean; deviationPattern?: DevPattern; allowPerSourceIndicator?: boolean; sourceDeviationOverrides?: Record<string, DevPattern> }
+    | { comparisonMode?: boolean; deviationPattern?: DevPattern; allowPerSourceIndicator?: boolean; sourceDeviationOverrides?: Record<string, DevPattern>; defaultDisplayMode?: TimeConfig['defaultDisplayMode'] }
     | undefined;
 
   // Shifts live with the picker: fixed → ttc.fixed, global → the linked GTP,
@@ -173,8 +186,14 @@ function mapTimeTabToTimeConfig(
   const shiftScope = (picker === 'fixed' ? ttc.fixed : picker === 'global' ? linkedGtp : ttc) as
     | { shifts?: TimeConfig['shifts']; shiftAggregator?: string }
     | undefined;
-  const shifts = shiftScope?.shifts;
-  const shiftAggregator = shifts && shifts.length > 0
+  // Stamp `enabled: true` on every configured shift. The backend's shift
+  // breakdown (one value per bucket PER SHIFT) only kicks in when each shift
+  // carries this flag — without it the engine returns a single un-split value
+  // per bucket, so the chart can only ever show one shift. The working
+  // ColumnChart configurator does exactly this; ours was sending shifts verbatim
+  // (no `enabled`), which is why the shift view never split into A/B/C.
+  const shifts = (shiftScope?.shifts ?? []).map((s) => ({ ...s, enabled: true }));
+  const shiftAggregator = shifts.length > 0
     ? (shiftScope?.shiftAggregator || 'max')
     : shiftScope?.shiftAggregator;
 
@@ -200,7 +219,15 @@ function mapTimeTabToTimeConfig(
     : ttc.defaultDurationId;
 
   return {
-    timezone: (picker === 'global' ? (linkedGtp?.timezone ?? ttc.timezone) : ttc.timezone),
+    // Timezone is SCOPED per picker, matching where the SDK TimeTab stores it:
+    // global → inherited from the linked GTP; fixed → under `ttc.fixed.timezone`
+    // (the Fixed section's dropdown emits into the fixed scope); local → top level.
+    // Reading top-level for fixed left the emitted timezone stale until a reload.
+    timezone: (picker === 'global'
+      ? (linkedGtp?.timezone ?? ttc.timezone)
+      : picker === 'fixed'
+      ? ((ttc.fixed as { timezone?: string } | undefined)?.timezone ?? ttc.timezone)
+      : ttc.timezone),
     // Preserve the real picker mode in both `type` and `pickerType`. Global no
     // longer masquerades as local — the engine branches on `pickerType` to pull
     // the window from ctx.globalTimeWindow.
@@ -238,6 +265,11 @@ function mapTimeTabToTimeConfig(
     // Shifts + aggregator (default "max" when shifts are configured).
     shifts,
     shiftAggregator,
+    // Default view mode ("normal" | "comparison" | "shift") chosen in the time
+    // tab — same scope as comparisonMode. Drives the widget's initial view.
+    defaultDisplayMode: (picker === 'global'
+      ? ((linkedGtp as { defaultDisplayMode?: TimeConfig['defaultDisplayMode'] } | undefined)?.defaultDisplayMode ?? cmpScope?.defaultDisplayMode)
+      : cmpScope?.defaultDisplayMode) as TimeConfig['defaultDisplayMode'],
   };
 }
 
@@ -310,6 +342,45 @@ const SERIES_COLOR_PALETTE = [
 function nextSeriesColor(chart: ChartConfig | undefined): string {
   const used = (chart?.series.length ?? 0) + (chart?.fixedSeries.length ?? 0);
   return SERIES_COLOR_PALETTE[used % SERIES_COLOR_PALETTE.length];
+}
+
+// The design-sdk Add/Edit Shift panel only enforces a non-empty name; it never
+// checks name uniqueness, empty (start == end) windows, or gives each shift a
+// distinct colour (it defaults every new shift to the same colour). Enforce the
+// rest here, on the shifts the TimeTab emits, before they persist / render:
+//   • drop shifts with no name (mandatory — belt & suspenders with the SDK)
+//   • drop duplicate names (case-insensitive, trimmed) — keep the first
+//   • drop empty windows where startTime === endTime (e.g. 00:00–00:00)
+//   • give each shift a distinct colour: keep the picked colour unless it's
+//     missing or collides with an earlier shift's, then take the next unused
+//     palette colour (so adding a shift auto-advances its colour).
+// HH:MM windows are inherently within a 24-hour clock (a night shift like
+// 22:00–06:00 is a valid < 24h span), so "within 24hr" needs no extra check.
+interface RawShift { id?: string; name?: string; color?: string; startTime?: string; endTime?: string; }
+function sanitizeShifts(shifts: RawShift[]): RawShift[] {
+  const seenNames = new Set<string>();
+  const usedColors = new Set<string>();
+  const out: RawShift[] = [];
+  for (const s of shifts) {
+    const name = (s.name ?? '').trim();
+    if (!name) continue;                                   // mandatory
+    const nameKey = name.toLowerCase();
+    if (seenNames.has(nameKey)) continue;                  // unique
+    // Do NOT drop for the window here: the SDK creates a new shift with default
+    // (often equal) start/end times BEFORE the user has set them, and this
+    // sanitizer runs on every onChange — silently dropping such a shift made it
+    // impossible to finish adding one, so it never persisted (shifts:[] in the
+    // resolve request). Window validity is the user's to fix in the panel.
+    seenNames.add(nameKey);
+    let color = s.color;
+    if (!color || usedColors.has(color)) {
+      color = SERIES_COLOR_PALETTE.find((c) => !usedColors.has(c))
+        ?? SERIES_COLOR_PALETTE[out.length % SERIES_COLOR_PALETTE.length];
+    }
+    usedColors.add(color);
+    out.push({ ...s, name, color });
+  }
+  return out;
 }
 
 // ── Axis helpers ────────────────────────────────────────────────────────────
@@ -466,6 +537,12 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   // have a popup open: initial mount, widget switch, and entering the Time tab.
   // It is never reset from echoes of what the time tab itself just emitted.
   const [timeTabSeed, setTimeTabSeed] = useState<Record<string, unknown> | undefined>(config?.timeTabConfig);
+  // Bumped ONLY on a timezone change to force-remount TimeTabConfiguration. The
+  // SDK's timezone dropdown doesn't reliably reflect a new selection from its own
+  // internal state (the old value persists), so — like the working PieChart — we
+  // re-seed with the new value and remount via this key. A timezone pick closes
+  // its own dropdown, so there's no other open popup for the remount to disrupt.
+  const [timeTabRemountKey, setTimeTabRemountKey] = useState(0);
   const [title,          setTitle]          = useState(config?.uiConfig?.title ?? '');
   const [description,    setDescription]    = useState(config?.uiConfig?.description ?? '');
   const [titleTouched,   setTitleTouched]   = useState(false);
@@ -488,6 +565,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   const [stacked,        setStacked]        = useState(config?.uiConfig?.style?.stacked ?? false);
   const [showLegend,     setShowLegend]     = useState(config?.uiConfig?.style?.showLegend ?? true);
   const [showDataLabels, setShowDataLabels] = useState(config?.uiConfig?.style?.showDataLabels ?? false);
+  const [scroll,         setScroll]         = useState(config?.uiConfig?.style?.scroll ?? false);
   const [yAxisUnit,      setYAxisUnit]      = useState(config?.uiConfig?.style?.yAxisUnit ?? '');
 
   // ── Widget size ───────────────────────────────────────────────────────────
@@ -522,6 +600,17 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     ...(config?.uiConfig?.style?.advancedSettings ?? {}),
   });
   const [advancedTitleWeightOpen, setAdvancedTitleWeightOpen] = useState(false);
+  // Title font-size is edited as a raw string so the field can go empty / hold a
+  // partial value mid-edit (e.g. after backspacing "20" to "" to type "18").
+  // A controlled numeric value coerced every keystroke can never be cleared and
+  // snaps back to the default. Only a valid positive number is committed to
+  // advancedSettings; clearing leaves the last committed size until a new one is
+  // typed. Kept in sync when the committed size changes (load / external update).
+  const [titleFontSizeInput, setTitleFontSizeInput] = useState(String(config?.uiConfig?.style?.advancedSettings?.titleFontSize ?? DEFAULT_ADVANCED_SETTINGS.titleFontSize));
+  useEffect(() => {
+    setTitleFontSizeInput(String(advancedSettings.titleFontSize));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [advancedSettings.titleFontSize]);
 
   // ── Modal state ───────────────────────────────────────────────────────────
   const configRef = useRef<HTMLDivElement>(null);
@@ -589,6 +678,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
       setStacked(config.uiConfig?.style?.stacked ?? false);
       setShowLegend(config.uiConfig?.style?.showLegend ?? true);
       setShowDataLabels(config.uiConfig?.style?.showDataLabels ?? false);
+      setScroll(config.uiConfig?.style?.scroll ?? false);
       setYAxisUnit(config.uiConfig?.style?.yAxisUnit ?? '');
       const nextWidgetElements = config.uiConfig?.style?.widgetElements ?? {
         hideWidgetElements: false,
@@ -643,54 +733,80 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   }, [config?.timeTabConfig]);
 
   // Workaround for a design-sdk (>= 0.7.7) regression that closes the
-  // TimeTabConfiguration side modals (Add/Edit Duration, Add Shift) the instant
-  // you interact with a pop-out surface inside them. The Periodicity multi-select
-  // (Daily/Weekly/Monthly… checkboxes), the Start/End Hour + Minute `SelectInput`
-  // dropdowns (`.fds-select-input__popover`) and the shift-color `ColorInput`
-  // picker (`.fds-color-input__popover`) all render their popover in a portal
-  // ATTACHED TO <body>, OUTSIDE the modal's `.fds-modal__backdrop`. The modal's
-  // document-level outside-pointer-down listener then treats a click on a
-  // dropdown option / periodicity checkbox / color swatch as a click OUTSIDE the
-  // modal and dismisses the whole modal — so unchecking "Weekly" closes the
-  // Duration modal. (Worked in 0.7.3, where these popovers stayed within the
-  // modal.)
+  // TimeTabConfiguration / configurator side modals (Add/Edit Duration, Add
+  // Shift, Add Data Source, …) the instant you interact with a pop-out surface
+  // inside them: the Start/End Hour+Minute selects (a portaled `DropdownMenu`,
+  // `.fds-dropdown-menu`), the Periodicity / generic `SelectInput` dropdowns
+  // (`.fds-select-input__popover`), the shift-colour `ColorInput`
+  // (`.fds-color-input__popover`) and the UNS pickers
+  // (`.fds-uns-tree-picker__popover`) all render their popover through a portal
+  // OUTSIDE the modal's DOM. Clicking an option/hour/swatch therefore reads as
+  // "outside the modal" and dismisses it. (Worked in 0.7.3, where these popovers
+  // stayed within the modal.)
   //
-  // Fix: attach a BUBBLE-phase stopPropagation boundary on each popover element
-  // as it is portaled in. The popover's own handlers (option/checkbox toggle,
-  // color drag, sliders) run first during the target/bubble phase; the event is
-  // then stopped at the popover boundary before it can bubble up to the modal's
-  // document-level listener. This keeps the modal open WITHOUT breaking any
-  // in-popover interaction (unlike a document-capture guard, which would swallow
-  // the color canvas's own pointerdown). Only pointer/mouse-DOWN is stopped —
-  // the modal's outside-click detection fires on those, while option/checkbox
-  // selection dispatches on `click`, which must still reach the SDK's delegated
-  // handler. A MutationObserver wires up popovers created after mount. Remove
-  // once the SDK ships a fix.
+  // Fix (ported verbatim from the working ColumnChart widget): ONE bubble-phase
+  // (NOT capture) `document` listener that inspects `event.composedPath()` — the
+  // event's real ancestor chain, accurate regardless of portals — and, when any
+  // ancestor matches a popover selector, calls BOTH `stopPropagation()` AND
+  // `preventDefault()`:
+  //   • `stopPropagation()` pre-empts the SDK's own outside-click check (also a
+  //     bubble-phase `document` mousedown listener, per useClickOutside.js) —
+  //     same-node same-phase listeners fire in REGISTRATION ORDER, and this
+  //     effect mounts with the whole configurator, before any modal can open,
+  //     so it always registers first.
+  //   • `preventDefault()` is the KEY the earlier stopPropagation-only versions
+  //     missed. The Add-Shift dropdown does NOT dismiss via a mousedown
+  //     outside-click listener at all — it dismisses via a FOCUS TRAP
+  //     (blur/focusout). A mousedown's native DEFAULT ACTION moves
+  //     `document.activeElement` to the clicked option, which lives in a portal
+  //     outside the panel, so focus "escapes" the panel boundary and the trap
+  //     closes it — before `click` (the actual selection) even fires. Stopping
+  //     propagation can't stop a native focus shift; `preventDefault()` on the
+  //     mousedown suppresses it so the field stays focused. `click` still fires
+  //     normally afterward (a preceding mousedown's preventDefault doesn't block
+  //     it), so selection keeps working.
+  // Bubble phase is deliberate: the event has already reached and been handled
+  // by its real target (the option / colour canvas) before it bubbles up to
+  // `document`, so nothing in the popover loses its own interaction — a capture
+  // guard would swallow those before the target ever sees them. Remove once the
+  // SDK ships a fix.
   useEffect(() => {
-    const SELECTORS = ['.fds-select-input__popover', '.fds-color-input__popover', '.fds-uns-tree-picker__popover'];
+    const SELECTORS = ['.fds-select-input__popover', '.fds-color-input__popover', '.fds-uns-tree-picker__popover', '.fds-dropdown-menu'];
     const EVENTS: Array<keyof DocumentEventMap> = ['pointerdown', 'mousedown'];
-    const stop = (e: Event) => e.stopPropagation();
-    const attach = (el: Element) => {
-      if ((el as { __cblPopoverGuard?: boolean }).__cblPopoverGuard) return;
-      (el as { __cblPopoverGuard?: boolean }).__cblPopoverGuard = true;
-      EVENTS.forEach((ev) => el.addEventListener(ev, stop));
-    };
-    const scan = (root: ParentNode) =>
-      SELECTORS.forEach((sel) => root.querySelectorAll?.(sel).forEach(attach));
-    scan(document);
-    const obs = new MutationObserver((muts) => {
-      muts.forEach((m) =>
-        m.addedNodes.forEach((n) => {
-          if (n.nodeType !== 1) return;
-          const el = n as Element;
-          if (SELECTORS.some((sel) => el.matches?.(sel))) attach(el);
-          scan(el);
-        }),
+    const guard = (e: Event) => {
+      const path = (e as { composedPath?: () => EventTarget[] }).composedPath?.() ?? [];
+      const matched = path.find(
+        (n): n is Element => n instanceof Element && SELECTORS.some((sel) => n.matches(sel)),
       );
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-    return () => obs.disconnect();
+      if (matched) {
+        e.stopPropagation();
+        if (e.cancelable) e.preventDefault();
+      }
+    };
+    EVENTS.forEach((ev) => document.addEventListener(ev, guard));
+    return () => EVENTS.forEach((ev) => document.removeEventListener(ev, guard));
   }, []);
+
+  // Only one dropdown/select may be open at a time. Each SelectInput here is
+  // manually controlled (its own isOpen boolean, toggled by its trigger) with no
+  // outside-click close, so without this they stack open. Every trigger routes
+  // through toggleDropdown, which closes all the others first — so clicking a
+  // second dropdown auto-closes the first. Item selection inside a dropdown does
+  // NOT go through here, so multi-select dropdowns still stay open while picking.
+  function closeAllDropdowns() {
+    setChartPickerOpen(false);
+    setSizePickerOpen(false);
+    setAdvancedTitleWeightOpen(false);
+    setFormChartTypeOpen(false);
+    setFormDashStylePickerOpen(false);
+    setFormPeriodicityDropdownOpen(false);
+    setFormAxisSeriesDropdownOpen(false);
+    setFormStackSeriesDropdownOpen(false);
+  }
+  function toggleDropdown(isOpen: boolean, open: (v: boolean) => void) {
+    closeAllDropdowns();
+    if (!isOpen) open(true);
+  }
 
   // ── Builders ──────────────────────────────────────────────────────────────
 
@@ -702,6 +818,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     stacked?: boolean;
     showLegend?: boolean;
     showDataLabels?: boolean;
+    scroll?: boolean;
     yAxisUnit?: string;
     widgetElements?: WidgetElementsConfig;
     advancedSettings?: WidgetAdvancedSettingsConfig;
@@ -737,6 +854,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
         stacked:        overrides.stacked        ?? stacked,
         showLegend:     overrides.showLegend     ?? showLegend,
         showDataLabels: overrides.showDataLabels ?? showDataLabels,
+        scroll:         overrides.scroll         ?? scroll,
         yAxisUnit:      overrides.yAxisUnit      ?? yAxisUnit,
         widgetSize:     overrides.widgetSize     ?? {
           preset: sizePreset, width: sizeWidth, height: sizeHeight, locked: sizeLocked,
@@ -844,7 +962,9 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   }
 
   function toggleSection(section: string) {
-    setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }));
+    // Single-open accordion: opening a section collapses every other one; only
+    // one can stay open at a time (mirrors the LineChart configurator).
+    setExpandedSections((prev) => (prev[section] ? {} : { [section]: true }));
   }
 
   // ── Single emit funnel ─────────────────────────────────────────────────────
@@ -882,9 +1002,26 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     : isEditing ? (draft ?? pendingChart)
     : (activeChart ?? EMPTY_SECTION_CHART);
 
+  // A chart title must be unique across the widget's charts (case-insensitive,
+  // trimmed). Excludes the chart being edited so re-saving it unchanged is fine.
+  function isDuplicateTitle(title: string, excludeId?: string): boolean {
+    const t = title.trim().toLowerCase();
+    if (!t) return false;
+    return chartsList.some((c) => c._id !== excludeId && c.title.trim().toLowerCase() === t);
+  }
+
   const canAddEmpty    = pendingChart.title.trim().length > 0;
-  const canCommitDraft = (draft?.title.trim().length ?? 0) > 0;
-  const titleError     = isEditing && titleTouched && !canCommitDraft;
+  // Editing: block empty AND duplicate titles. edit-existing excludes its own id
+  // so an unchanged title still saves; edit-new (fresh id, not in the list yet)
+  // is checked against every existing chart.
+  const draftTitle       = draft?.title.trim() ?? '';
+  const draftDuplicate   = isEditing && draftTitle.length > 0
+    && isDuplicateTitle(draftTitle, editMode === 'edit-existing' ? draft?._id : undefined);
+  const canCommitDraft   = draftTitle.length > 0 && !draftDuplicate;
+  // Duplicate is surfaced live (explains why Save is disabled); the "required"
+  // (empty) error waits until the field is touched.
+  const titleError       = isEditing && (draftDuplicate || (titleTouched && !canCommitDraft));
+  const titleErrorText   = draftDuplicate ? 'Chart title must be unique' : 'Chart title is required';
 
   // Route a field change to the right buffer based on the current mode.
   function patchActive(patch: Partial<ChartConfig>) {
@@ -1022,6 +1159,10 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     // Data sources get the next palette color by default; other sections start blank.
     const defaultColor = (section === 'series' || section === 'fixed')
       ? nextSeriesColor(chartsList.find((c) => c._id === chartId))
+      : (section === 'plotLine' || section === 'plotBand')
+      // Plot lines/bands get a sensible default color so the swatch isn't
+      // transparent/empty when the modal opens.
+      ? '#F79009'
       : '';
     setFormUnsPath(''); setFormLabel(''); setFormColor(defaultColor); setFormUnit(''); setFormPrecision('');
     setFormChartType('Column'); setFormChartTypeOpen(false);
@@ -1135,10 +1276,27 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     setFormPeriodicityType('independent'); setFormPeriodicities([]); setFormCurrentPeriodicity(''); setFormPeriodicityDropdownOpen(false);
   }
 
+  // A data source's Label must be unique (case-insensitive) among the chart's
+  // existing sources — series AND fixedSeries together — excluding the one being
+  // edited. Drives the inline error + disables the submit button so the same
+  // name can't be added twice.
+  const duplicateDataSourceName = (() => {
+    if (modalSection !== 'series' && modalSection !== 'fixed') return false;
+    const name = formLabel.trim().toLowerCase();
+    if (!name) return false;
+    const chart = chartsList.find((c) => c._id === modalChartId);
+    if (!chart) return false;
+    return [...chart.series, ...chart.fixedSeries].some(
+      (s) => s._id !== editingId && (s.label ?? '').trim().toLowerCase() === name,
+    );
+  })();
+
   function handleModalSubmit() {
     if (!modalChartId) { handleModalClose(); return; }
     const chart = chartsList.find((c) => c._id === modalChartId);
     if (!chart) { handleModalClose(); return; }
+    // Guard (button is also disabled): never commit a duplicate-named source.
+    if ((modalSection === 'series' || modalSection === 'fixed') && duplicateDataSourceName) return;
 
     let update: Partial<ChartConfig> = {};
 
@@ -1245,8 +1403,27 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     // Backfill the Fixed picker's cycle-time defaults (00:00 / Monday / 1st)
     // before mapping, so blanks resolve to a sensible start-of-period window.
     const ttc    = withCycleDefaults(ttcRawInput as unknown as Record<string, unknown>) as unknown as TimeTabUIConfig;
-    const tc     = mapTimeTabToTimeConfig(ttc, globalTimepickers);
     const ttcRaw = ttc as unknown as Record<string, unknown>;
+    // Enforce shift rules (unique+mandatory names, no empty windows, distinct
+    // colours) the SDK panel doesn't. Mutates ttc's shift arrays in place so the
+    // mapped timeConfig below and the persisted ttcRaw both see the sanitized
+    // shifts. Scopes: local picker → top-level shifts, fixed → fixed.shifts.
+    let shiftsChanged = false;
+    const sanitizeScope = (scope: Record<string, unknown> | undefined) => {
+      if (scope && Array.isArray(scope.shifts) && scope.shifts.length > 0) {
+        const cleaned = sanitizeShifts(scope.shifts as RawShift[]);
+        if (JSON.stringify(cleaned) !== JSON.stringify(scope.shifts)) {
+          scope.shifts = cleaned;
+          shiftsChanged = true;
+        }
+      }
+    };
+    sanitizeScope(ttcRaw);
+    sanitizeScope(ttcRaw.fixed as Record<string, unknown> | undefined);
+    const tc     = mapTimeTabToTimeConfig(ttc, globalTimepickers);
+    // A timezone change is the one edit the SDK dropdown won't reflect on its own
+    // — force a re-seed + remount below so the new zone actually sticks.
+    const tzChanged = tc.timezone !== currentTimeConfig?.timezone;
     // When the user links time to something OTHER than a Global Time Picker
     // (local / fixed), drop the now-stale `global` scope from the raw TimeTab
     // state before it's persisted. The design-sdk TimeTab leaves the previous
@@ -1272,6 +1449,15 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
     setCurrentTimeConfig(tc);
     setCurrentTimeTabConfig(ttcRaw);
     emit({}, { timeConfig: tc, timeTabConfig: ttcRaw });
+    // When we changed the shifts (dropped an invalid one / re-coloured), re-seed
+    // the TimeTab so its shift list reflects the sanitized data. Safe here: the
+    // SDK closes the Add/Edit Shift panel on save, so no popover is open to be
+    // disrupted, and this only fires on genuine shift changes — never on the
+    // periodicity/duration edits the reseed guard protects.
+    if (shiftsChanged || tzChanged) setTimeTabSeed(ttcRaw);
+    // Timezone: the SDK keeps the old value in its internal state, so re-seed
+    // (above) AND remount (key bump) with the new value so the dropdown updates.
+    if (tzChanged) setTimeTabRemountKey((k) => k + 1);
   }
 
   // ── Selected chart ────────────────────────────────────────────────────────
@@ -1339,13 +1525,14 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
   return (
     <div className="cc-config" ref={configRef}>
       <div className="cc-config__header">
-        <IconButton
-          icon={<ArrowLeft size={20} />}
-          size="20"
-          aria-label="Back"
-          title="Back"
-          onClick={onBack}
-        />
+        <Tooltip bodyText="Close" placement="Bottom">
+          <IconButton
+            icon={<ArrowLeft size={20} />}
+            size="20"
+            aria-label="Close"
+            onClick={onBack}
+          />
+        </Tooltip>
         <span className="BodyLargeSemibold cc-config__header-title">Combined Bar &amp; Line Chart</span>
       </div>
 
@@ -1414,7 +1601,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                     placeholder="Select a chart…"
                     value={activeChart ? (activeChart.title || `Chart ${selectedChartIndex + 1}`) : ''}
                     isOpen={chartPickerOpen}
-                    onClick={() => setChartPickerOpen((v) => !v)}
+                    onClick={() => toggleDropdown(chartPickerOpen, setChartPickerOpen)}
                   >
                     {chartPickerOpen && (
                       <DropdownMenu>
@@ -1436,11 +1623,11 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   <TextInput
                     label="Chart Title"
                     necessityIndicator="required"
-                    placeholder="Enter title"
+                    placeholder="e.g. Energy Overview"
                     value={formChart.title}
                     isReadOnly={isView}
                     validationState={titleError ? 'error' : 'none'}
-                    errorText="Chart title is required"
+                    errorText={titleErrorText}
                     onChange={({ value }) => patchActive({ title: value })}
                     onBlur={() => setTitleTouched(true)}
                   />
@@ -1448,7 +1635,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
 
                 <TextInput
                   label="Description"
-                  placeholder="Enter description"
+                  placeholder="e.g. Hourly power consumption by line"
                   value={formChart.description ?? ''}
                   isReadOnly={isView}
                   onChange={({ value }) => patchActive({ description: value })}
@@ -1493,16 +1680,16 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   isExpanded={isSectionOpen('series')}
                   onToggle={() => toggleSection('series')}
                   headerAction={
-                    <IconButton
-                      icon={<Plus size={14} />}
-                      size="16"
-                      aria-label="Add series"
-                      title="Add data source"
-                      onClick={(e) => openAddModal(selectedChart._id, 'series', e)}
-                    />
+                    <Tooltip bodyText="Add data source" placement="Left">
+                      <IconButton
+                        icon={<Plus size={14} />}
+                        size="16"
+                        aria-label="Add data source"
+                        onClick={(e) => openAddModal(selectedChart._id, 'series', e)}
+                      />
+                    </Tooltip>
                   }
                 >
-                  <div className="cc-config__section">
                     {selectedChart.series.length === 0 && (
                       <p className="cc-config__empty-hint BodySmallRegular">No data sources. Click + to add one.</p>
                     )}
@@ -1523,7 +1710,6 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                       />
                       );
                     })}
-                  </div>
                 </ProductAccordionItem>
 
 
@@ -1535,17 +1721,17 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   isExpanded={isSectionOpen('axis')}
                   onToggle={() => toggleSection('axis')}
                   headerAction={
-                    <IconButton
-                      icon={<Plus size={14} />}
-                      size="16"
-                      aria-label="Add right axis"
-                      title="Add right axis"
-                      isDisabled={(selectedChart.axes ?? []).some((a) => a.yAxis === 1)}
-                      onClick={(e) => openAddAxisModal(selectedChart._id, e)}
-                    />
+                    <Tooltip bodyText="Add right axis" placement="Left">
+                      <IconButton
+                        icon={<Plus size={14} />}
+                        size="16"
+                        aria-label="Add right axis"
+                        isDisabled={(selectedChart.axes ?? []).some((a) => a.yAxis === 1)}
+                        onClick={(e) => openAddAxisModal(selectedChart._id, e)}
+                      />
+                    </Tooltip>
                   }
                 >
-                  <div className="cc-config__section">
                     <div className="cc-config__modal-hint">
                       <Info size={16} className="cc-config__modal-hint-icon" aria-hidden="true" />
                       <span className="BodySmallRegular">
@@ -1589,7 +1775,6 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                         />
                       );
                     })}
-                  </div>
                 </ProductAccordionItem>
 
                 {/* Plot Lines */}
@@ -1602,12 +1787,13 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   isExpanded={isSectionOpen('plotLine')}
                   onToggle={() => toggleSection('plotLine')}
                   headerAction={
-                    <IconButton icon={<Plus size={14} />} size="16" aria-label="Add plot line" title="Add plot line"
-                      onClick={(e) => openAddModal(selectedChart._id, 'plotLine', e)}
-                    />
+                    <Tooltip bodyText="Add plot line" placement="Left">
+                      <IconButton icon={<Plus size={14} />} size="16" aria-label="Add plot line"
+                        onClick={(e) => openAddModal(selectedChart._id, 'plotLine', e)}
+                      />
+                    </Tooltip>
                   }
                 >
-                  <div className="cc-config__section">
                     {selectedChart.plotLines.length === 0 && (
                       <p className="cc-config__empty-hint BodySmallRegular">No plot lines. Click + to add.</p>
                     )}
@@ -1623,7 +1809,6 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                         }
                       />
                     ))}
-                  </div>
                 </ProductAccordionItem>
 
                 {/* Plot Bands */}
@@ -1636,12 +1821,13 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   isExpanded={isSectionOpen('plotBand')}
                   onToggle={() => toggleSection('plotBand')}
                   headerAction={
-                    <IconButton icon={<Plus size={14} />} size="16" aria-label="Add plot band" title="Add plot band"
-                      onClick={(e) => openAddModal(selectedChart._id, 'plotBand', e)}
-                    />
+                    <Tooltip bodyText="Add plot band" placement="Left">
+                      <IconButton icon={<Plus size={14} />} size="16" aria-label="Add plot band"
+                        onClick={(e) => openAddModal(selectedChart._id, 'plotBand', e)}
+                      />
+                    </Tooltip>
                   }
                 >
-                  <div className="cc-config__section">
                     {selectedChart.plotBands.length === 0 && (
                       <p className="cc-config__empty-hint BodySmallRegular">No plot bands. Click + to add.</p>
                     )}
@@ -1657,7 +1843,6 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                         }
                       />
                     ))}
-                  </div>
                 </ProductAccordionItem>
               </>
             </div>
@@ -1668,6 +1853,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
         {activeTab === 'time' && (
           <div className={`cc-config__time-tab${perSourceActive ? ' cc-config__time-tab--per-source' : ''}`}>
             <TimeTabConfiguration
+              key={timeTabRemountKey}
               onChange={handleTimeChange}
               value={timeTabSeedValue}
               globalTimepickers={globalTimepickers}
@@ -1703,18 +1889,32 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                     label="Border Width"
                     type="number"
                     suffix="px"
+                    placeholder="e.g. 1"
                     value={String(cardBorderWidth)}
-                    onChange={({ value }) => updateCardStyle({ borderWidth: Math.max(0, Math.round(Number(value) || 0)) })}
+                    onChange={({ value }) => updateCardStyle({ borderWidth: Number(nonNegIntStr(value)) || 0 })}
                   />
                   <TextInput
                     label="Border Radius"
                     type="number"
                     suffix="px"
+                    placeholder="e.g. 4"
                     value={String(cardBorderRadius)}
-                    onChange={({ value }) => updateCardStyle({ borderRadius: Math.max(0, Math.round(Number(value) || 0)) })}
+                    onChange={({ value }) => updateCardStyle({ borderRadius: Number(nonNegIntStr(value)) || 0 })}
                   />
                 </div>
               )}
+            </div>
+
+            {/* Chart scroll — horizontal scroll for long ranges / many bars */}
+            <div className="cc-config__wrap-card">
+              <div className="cc-config__field-row">
+                <span className="BodySmallSemibold cc-config__toggle-label">Scroll</span>
+                <Switch
+                  accessibilityLabel="Scroll"
+                  isChecked={scroll}
+                  onChange={({ isChecked }) => { setScroll(isChecked); emit({ scroll: isChecked }); }}
+                />
+              </div>
             </div>
 
             <div className="cc-config__widget-elements-section">
@@ -1744,12 +1944,36 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   isChecked={hideInfoIcon}
                   onChange={() => updateWidgetElements({ hideInfoIcon: !hideInfoIcon })}
                 />
-                <Checkbox
-                  label="Chart Title"
-                  size="Medium"
-                  isChecked={hideChartTitle}
-                  onChange={() => updateWidgetElements({ hideChartTitle: !hideChartTitle })}
-                />
+                {/* With multiple charts the title row IS the chart switcher —
+                    hiding it would remove the only way to move between charts, so
+                    the option is disabled (and unchecked). A tooltip explains
+                    why. The tooltip wraps a hoverable <div> (a disabled checkbox
+                    doesn't reliably fire hover on its own), and `placement="Top"`
+                    keeps it inside the config panel column rather than floating
+                    over the canvas. */}
+                {chartsList.length > 1 ? (
+                  <Tooltip
+                    bodyText="Can't hide the chart title while more than one chart is added — the title row is the chart switcher used to move between charts."
+                    placement="Top"
+                  >
+                    <div className="cc-config__disabled-check">
+                      <Checkbox
+                        label="Chart Title"
+                        size="Medium"
+                        isDisabled
+                        isChecked={false}
+                        onChange={() => { /* disabled — no-op */ }}
+                      />
+                    </div>
+                  </Tooltip>
+                ) : (
+                  <Checkbox
+                    label="Chart Title"
+                    size="Medium"
+                    isChecked={hideChartTitle}
+                    onChange={() => updateWidgetElements({ hideChartTitle: !hideChartTitle })}
+                  />
+                )}
               </CheckboxGroup>
             </div>
 
@@ -1769,13 +1993,27 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   <TextInput
                     label="Title Font Size"
                     type="number"
-                    placeholder="20"
-                    value={String(advancedSettings.titleFontSize)}
+                    placeholder="e.g. 20"
+                    value={titleFontSizeInput}
                     onChange={({ value }) => {
+                      // Digits only — strips a leading "-" (no negatives) and any
+                      // stray non-numeric characters. Keeps the raw string so the
+                      // field can still be cleared / hold a partial value; only a
+                      // valid positive number is committed.
+                      const clean = value.replace(/[^\d]/g, '');
+                      setTitleFontSizeInput(clean);
+                      const parsed = Number(clean);
+                      if (clean !== '' && Number.isFinite(parsed) && parsed > 0) {
+                        updateAdvancedSettings({ titleFontSize: Math.round(parsed) });
+                      }
+                    }}
+                    onBlur={({ value }) => {
+                      // On blur, an empty / invalid field snaps back to the last
+                      // committed size so it never lingers blank.
                       const parsed = Number(value);
-                      updateAdvancedSettings({
-                        titleFontSize: Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : DEFAULT_ADVANCED_SETTINGS.titleFontSize,
-                      });
+                      if (value.trim() === '' || !Number.isFinite(parsed) || parsed <= 0) {
+                        setTitleFontSizeInput(String(advancedSettings.titleFontSize));
+                      }
                     }}
                   />
                   <div>
@@ -1790,7 +2028,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                     placeholder="Select weight"
                     value={advancedSettings.titleFontWeight}
                     isOpen={advancedTitleWeightOpen}
-                    onClick={() => setAdvancedTitleWeightOpen((v) => !v)}
+                    onClick={() => toggleDropdown(advancedTitleWeightOpen, setAdvancedTitleWeightOpen)}
                   >
                     {advancedTitleWeightOpen && (
                       <DropdownMenu>
@@ -1838,13 +2076,6 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                     <ColorInput
                       value={advancedSettings.yAxisTextColor}
                       onChange={(value) => updateAdvancedSettings({ yAxisTextColor: value })}
-                    />
-                  </div>
-                  <div>
-                    <InputFieldHeader label="Axis Line Color" />
-                    <ColorInput
-                      value={advancedSettings.yAxisLineColor}
-                      onChange={(value) => updateAdvancedSettings({ yAxisLineColor: value })}
                     />
                   </div>
 
@@ -1963,7 +2194,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
               isFullWidth
               isDisabled={
                 (modalSection === 'series' || modalSection === 'fixed')
-                  ? !formLabel.trim() || !formUnsPath.trim() || !formColor.trim()
+                  ? !formLabel.trim() || !formUnsPath.trim() || !formColor.trim() || duplicateDataSourceName
                   : modalSection === 'plotBand'
                   ? !formLabel.trim() || !formColor.trim() || !formFrom.trim() || !formTo.trim()
                   : modalSection === 'axis'
@@ -1971,6 +2202,12 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   ? (!formAxisName.trim() || (formAxisYAxis === 1 && formAxisSeriesIds.length === 0))
                   : modalSection === 'stack'
                   ? !formStackName.trim() || formStackSeriesIds.length === 0
+                  : modalSection === 'plotLine'
+                  // Label + width are required; a Dependent line also needs at
+                  // least one periodicity (else it can't be scoped and would
+                  // render at every periodicity).
+                  ? !formLabel.trim() || !formWidth.trim()
+                    || (formPeriodicityType === 'dependent' && formPeriodicities.length === 0)
                   : false
               }
               onClick={handleModalSubmit}
@@ -1989,6 +2226,8 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   placeholder={modalSection === 'fixed' ? 'e.g. Target' : 'e.g. Power Consumption'}
                   value={formLabel}
                   onChange={({ value }) => setFormLabel(value)}
+                  validationState={duplicateDataSourceName ? 'error' : 'none'}
+                  errorText={duplicateDataSourceName ? `A data source named "${formLabel.trim()}" already exists in this chart.` : undefined}
                 />
                 {modalSection === 'series' && (
                   <SelectInput
@@ -1996,7 +2235,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                     placeholder="Select chart type…"
                     value={formChartType}
                     isOpen={formChartTypeOpen}
-                    onClick={() => setFormChartTypeOpen((v: boolean) => !v)}
+                    onClick={() => toggleDropdown(formChartTypeOpen, setFormChartTypeOpen)}
                   >
                     {formChartTypeOpen && (
                       <DropdownMenu>
@@ -2025,18 +2264,19 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                 <UNSTreePicker
                   label="UNS Path"
                   necessityIndicator="required"
-                  placeholder="Enter UNS Path"
+                  placeholder="e.g. plant/line1/power — or type / to browse"
                   value={formUnsPath}
                   workspaces={unsWorkspaces}
                   isLoadingWorkspaces={isLoadingWorkspaces}
                   loadChildren={loadUnsChildren}
                   searchNodes={searchUnsNodes}
                   onChange={(value: string) => setFormUnsPath(value)}
+                  onOpen={closeAllDropdowns}
                 />
                 {modalSection === 'series' && (
                   <div className="cc-series-modal__two-col">
                     <TextInput label="Unit" placeholder="e.g. kWh" value={formUnit} onChange={({ value }) => setFormUnit(value)} />
-                    <TextInput label="Precision" type="number" placeholder="e.g. 2" value={formPrecision} onChange={({ value }) => setFormPrecision(value)} />
+                    <TextInput label="Precision" type="number" placeholder="e.g. 2" value={formPrecision} onChange={({ value }) => setFormPrecision(nonNegIntStr(value))} />
                   </div>
                 )}
               </>
@@ -2060,6 +2300,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                   loadChildren={loadUnsChildren}
                   searchNodes={searchUnsNodes}
                   onChange={(value: string) => setFormValue(value)}
+                  onOpen={closeAllDropdowns}
                 />
                 {/* 3. Color */}
                 <div>
@@ -2068,8 +2309,8 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                 </div>
                 {/* 4. Line style */}
                 <div className="cc-series-modal__two-col">
-                  <TextInput label="Width" type="number" placeholder="e.g. 2" value={formWidth} onChange={({ value }) => setFormWidth(value)} />
-                  <SelectInput label="Dash style" placeholder="Solid" value={formDashStyle || 'Solid'} isOpen={formDashStylePickerOpen} onClick={() => setFormDashStylePickerOpen((v) => !v)}>
+                  <TextInput label="Width" necessityIndicator="required" isRequired type="number" placeholder="e.g. 2" value={formWidth} onChange={({ value }) => setFormWidth(nonNegDecimalStr(value))} />
+                  <SelectInput label="Dash style" placeholder="Solid" value={formDashStyle || 'Solid'} isOpen={formDashStylePickerOpen} onClick={() => toggleDropdown(formDashStylePickerOpen, setFormDashStylePickerOpen)}>
                     {formDashStylePickerOpen && (
                       <DropdownMenu>
                         <ActionListItemGroup>
@@ -2103,14 +2344,15 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                 </RadioGroup>
                 {formPeriodicityType === 'dependent' && (
                   <>
+                    <InputFieldHeader label="Periodicities" necessityIndicator="required" />
                     <div className="cc-periodicity-row">
                       <div className="cc-periodicity-row__select">
                         <SelectInput
                           label="Add periodicity"
-                          placeholder="Select…"
+                          placeholder="e.g. Hourly"
                           value={formCurrentPeriodicity ? formCurrentPeriodicity.charAt(0).toUpperCase() + formCurrentPeriodicity.slice(1) : ''}
                           isOpen={formPeriodicityDropdownOpen}
-                          onClick={() => setFormPeriodicityDropdownOpen((v) => !v)}
+                          onClick={() => toggleDropdown(formPeriodicityDropdownOpen, setFormPeriodicityDropdownOpen)}
                         >
                           {formPeriodicityDropdownOpen && (
                             <DropdownMenu>
@@ -2168,8 +2410,8 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                 {/* allowFreeValue (design-sdk 0.7.17): type a number or / to
                     bind a UNS topic — one hybrid field per bound, no toggle. */}
                 <div className="cc-series-modal__two-col">
-                  <UNSTreePicker label="Start value" necessityIndicator="required" isRequired placeholder="Value or / to bind" value={formFrom} allowFreeValue workspaces={unsWorkspaces} isLoadingWorkspaces={isLoadingWorkspaces} loadChildren={loadUnsChildren} searchNodes={searchUnsNodes} onChange={(value: string) => setFormFrom(value)} />
-                  <UNSTreePicker label="End value"   necessityIndicator="required" isRequired placeholder="Value or / to bind" value={formTo}   allowFreeValue workspaces={unsWorkspaces} isLoadingWorkspaces={isLoadingWorkspaces} loadChildren={loadUnsChildren} searchNodes={searchUnsNodes} onChange={(value: string) => setFormTo(value)} />
+                  <UNSTreePicker label="Start value" necessityIndicator="required" isRequired placeholder="Value or / to bind" value={formFrom} allowFreeValue workspaces={unsWorkspaces} isLoadingWorkspaces={isLoadingWorkspaces} loadChildren={loadUnsChildren} searchNodes={searchUnsNodes} onChange={(value: string) => setFormFrom(value)} onOpen={closeAllDropdowns} />
+                  <UNSTreePicker label="End value"   necessityIndicator="required" isRequired placeholder="Value or / to bind" value={formTo}   allowFreeValue workspaces={unsWorkspaces} isLoadingWorkspaces={isLoadingWorkspaces} loadChildren={loadUnsChildren} searchNodes={searchUnsNodes} onChange={(value: string) => setFormTo(value)} onOpen={closeAllDropdowns} />
                 </div>
                 {/* Axis (only when a Right axis exists) */}
                 {plotAxisRadio}
@@ -2187,7 +2429,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                     label="Label"
                     necessityIndicator="required"
                     isRequired
-                    placeholder="Enter label"
+                    placeholder="e.g. Temperature (°C)"
                     value={formAxisName}
                     onChange={({ value }) => setFormAxisName(value)}
                   />
@@ -2206,7 +2448,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                         };
                       })}
                       isOpen={formAxisSeriesDropdownOpen}
-                      onClick={() => setFormAxisSeriesDropdownOpen((v) => !v)}
+                      onClick={() => toggleDropdown(formAxisSeriesDropdownOpen, setFormAxisSeriesDropdownOpen)}
                     >
                       {formAxisSeriesDropdownOpen && (
                         <DropdownMenu>
@@ -2262,7 +2504,7 @@ export function CombinedBarLineChartConfiguration(props: CombinedBarLineChartCon
                       };
                     })}
                     isOpen={formStackSeriesDropdownOpen}
-                    onClick={() => setFormStackSeriesDropdownOpen((v) => !v)}
+                    onClick={() => toggleDropdown(formStackSeriesDropdownOpen, setFormStackSeriesDropdownOpen)}
                   >
                     {formStackSeriesDropdownOpen && (
                       <DropdownMenu>

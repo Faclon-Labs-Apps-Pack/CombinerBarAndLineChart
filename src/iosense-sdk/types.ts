@@ -86,6 +86,8 @@ export interface Duration {
   yEvent?: string;                // 'Start' | 'End' | 'Now' — boundary the end snaps to
   calendarType?: string;          // e.g. 'today' | 'yesterday' | 'current_month'
   periodicities?: string[];
+  isBuiltIn?: boolean;            // SDK-authored built-in preset vs a user-created custom duration
+  hidden?: boolean;              // SDK keeps a hidden duration in allDurations with hidden:true — filter it from the widget's list
 }
 
 // Raw cycle-time config (matches the platform's GTPCycleTimeConfig). The
@@ -134,10 +136,15 @@ export interface TimeConfig {
   comparisonMode?: boolean;
   deviationPattern?: 'green-up-positive' | 'red-up-positive';
   allowPerSourceIndicator?: boolean;
+  // Initial chart display mode chosen in the time tab ("default view mode"):
+  // 'comparison' → the Compare toggle starts on, 'shift' → the Shift toggle
+  // starts on, 'normal' → neither. Drives the widget's initial view and the
+  // engine's first resolve. When absent, falls back to the comparisonMode flag.
+  defaultDisplayMode?: 'normal' | 'shift' | 'comparison';
   // Shifts configured in the time tab (or inherited from the linked GTP). When
   // present the date picker shows a "Shift" toggle; the aggregator (default
   // "max") decides how a bucket spanning multiple shifts is rolled up.
-  shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string }>;
+  shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string; enabled?: boolean }>;
   shiftAggregator?: string;
   // Per-source deviation polarity overrides (the "Advanced Settings → Allow a
   // different comparison indicator for each data source" feature). Keyed by
@@ -153,6 +160,11 @@ export interface TimeWindow {
   startTime: number;
   endTime: number;
   periodicity?: string;
+  // Explicit Compare-toggle state from the date picker. Overrides the persisted
+  // `comparisonMode` config flag for this resolve — so turning Compare off drops
+  // the overlay even when the time tab defaults comparison on. Absent = no user
+  // interaction yet, so the engine falls back to the config default.
+  comparisonMode?: boolean;
   // Explicit comparison-period window chosen in the date picker's Compare panel
   // (Previous period / Same period last year / Custom). When present the engine
   // uses it verbatim instead of deriving the immediately-preceding window.
@@ -162,7 +174,7 @@ export interface TimeWindow {
   // non-empty) the engine resolves per-shift buckets and this overrides the
   // persisted `comparisonMode` config flag — Shift and Compare are mutually
   // exclusive, so an active shift request must stand comparison down.
-  shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string }>;
+  shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string; enabled?: boolean }>;
   shiftAggregator?: string;
 }
 
@@ -173,14 +185,19 @@ export type WidgetEvent =
         startTime: string;
         endTime: string;
         periodicity: string;
+        // Explicit Compare-toggle state on every emit. The engine keys off this
+        // (not the persisted comparisonMode config flag) so toggling Compare off
+        // drops the overlay. Absent from the payload means "not applicable".
+        comparisonMode?: boolean;
         // Set only when the date picker's Compare mode is enabled and applied.
         comparisonStartTime?: string;
         comparisonEndTime?: string;
-        // Set only when the date picker's Shift toggle is enabled. `shifts` is the
-        // configured shift windows (sent verbatim); `shiftAggregator` is how a bucket
-        // spanning multiple shifts is rolled up (default "max"). Mutually exclusive
-        // with the comparison fields.
-        shifts?: TimeConfig['shifts'];
+        // Set only when the date picker's Shift toggle is enabled. Mutually
+        // exclusive with the comparison fields. The engine takes `shifts`
+        // VERBATIM, and each shift MUST carry `enabled: true` (per the SDK
+        // resolveAndCompute contract) — without it the backend computes no
+        // per-shift buckets. `shiftAggregator` = roll-up operator (default "max").
+        shifts?: Array<{ id: string; name: string; startTime: string; endTime: string; color: string; enabled?: boolean }>;
         shiftAggregator?: string;
       };
     }
@@ -278,7 +295,6 @@ export interface WidgetAdvancedSettingsConfig {
   xAxisTextColor: string;
   xAxisLineColor: string;
   yAxisTextColor: string;
-  yAxisLineColor: string;
   gridLineColor: string;
   legendTextColor: string;
 }
@@ -312,6 +328,9 @@ export interface ColumnChartUIConfig {
     showLegend: boolean;
     showDataLabels: boolean;
     yAxisUnit: string;
+    // When true the chart scrolls horizontally instead of squeezing every
+    // category into the viewport — useful for long time ranges / many bars.
+    scroll?: boolean;
     widgetSize?: WidgetSizeConfig;
     widgetElements?: WidgetElementsConfig;
     advancedSettings?: WidgetAdvancedSettingsConfig;

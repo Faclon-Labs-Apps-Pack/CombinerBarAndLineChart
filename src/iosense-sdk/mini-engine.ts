@@ -169,7 +169,7 @@ export async function resolve(
     if (MOCK_WHEN_EMPTY) {
       const tf = PERIODICITY_TIME_FRAME[(periodicity ?? 'daily').toLowerCase()] ?? 'day';
       let data = makeDummyData(bindings, startTime, endTime, tf, 0, 1);
-      if (envelope.timeConfig?.comparisonMode) {
+      if (ctx.override?.comparisonMode ?? envelope.timeConfig?.comparisonMode) {
         const span = Math.max(0, endTime - startTime);
         const dummyCmp = makeDummyData(bindings, startTime - span, startTime, tf, 0.6, 0.88);
         data = attachComparisonSlots(data, dummyCmp);
@@ -204,9 +204,29 @@ export async function resolve(
     // exclusive with comparison and MUST win over the persisted `comparisonMode`
     // config flag — otherwise enabling Shift keeps returning comparison buckets
     // and the widget never leaves comparison mode.
-    const overrideShifts = ctx.override?.shifts;
-    const shiftActive = Array.isArray(overrideShifts) && overrideShifts.length > 0;
-    const comparisonMode = Boolean(envelope.timeConfig?.comparisonMode) && !shiftActive;
+    // Initial load = no override yet, so the default view mode from the time tab
+    // decides the view. Shift as the default resolves the configured shifts on
+    // first load (like comparisonMode does for comparison); a live Shift toggle
+    // then rides ctx.override.shifts.
+    const isInitial = ctx.override === undefined;
+    const configShifts = envelope.timeConfig?.shifts;
+    const shiftDefaultInitial =
+      isInitial &&
+      envelope.timeConfig?.defaultDisplayMode === 'shift' &&
+      Array.isArray(configShifts) && configShifts.length > 0;
+    const effectiveShifts = ctx.override?.shifts ?? (shiftDefaultInitial ? configShifts : undefined);
+    const shiftActive = Array.isArray(effectiveShifts) && effectiveShifts.length > 0;
+    // The live Compare toggle wins over the persisted config: once the user has
+    // interacted (override present), honor their explicit choice so turning
+    // Compare OFF drops the comparison window. On the initial load, the time
+    // tab's default view mode decides — 'comparison' → on — falling back to the
+    // legacy comparisonMode flag when no explicit default mode is set.
+    const dm = envelope.timeConfig?.defaultDisplayMode;
+    const comparisonWanted = ctx.override?.comparisonMode
+      ?? (isInitial
+          ? (dm != null ? dm === 'comparison' : Boolean(envelope.timeConfig?.comparisonMode))
+          : false);
+    const comparisonMode = comparisonWanted && !shiftActive;
     let compStart = 0;
     let compEnd = 0;
     if (comparisonMode) {
@@ -228,8 +248,8 @@ export async function resolve(
       ? { comparisonMode: true, comparisonStartTime: compStart, comparisonEndTime: compEnd }
       : (shiftActive
           ? {
-              shifts: overrideShifts as unknown as Array<Record<string, unknown>>,
-              shiftAggregator: ctx.override?.shiftAggregator,
+              shifts: effectiveShifts as unknown as Array<Record<string, unknown>>,
+              shiftAggregator: ctx.override?.shiftAggregator ?? envelope.timeConfig?.shiftAggregator,
             }
           : undefined);
     if (extras && 'shifts' in extras) {
@@ -266,8 +286,8 @@ export async function resolve(
     // shift tag, so the widget can't tell it's shift data. Tag each bucket by its
     // time-of-day window so the per-shift render lights up. Best visualized at an
     // hourly/minute range where buckets span different shift windows.
-    if (shiftActive && MOCK_WHEN_EMPTY && overrideShifts && !hasShiftTags(items)) {
-      items = tagShiftSlots(items, overrideShifts);
+    if (shiftActive && MOCK_WHEN_EMPTY && effectiveShifts && !hasShiftTags(items)) {
+      items = tagShiftSlots(items, effectiveShifts);
     }
 
     // Pass resolveAndCompute items through AS-IS (raw shape) — same as the

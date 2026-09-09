@@ -328,7 +328,7 @@
       "type": "object",
       "required": [
         "enabled", "titleFontSize", "titleFontColor", "titleFontWeight",
-        "xAxisTextColor", "xAxisLineColor", "yAxisTextColor", "yAxisLineColor",
+        "xAxisTextColor", "xAxisLineColor", "yAxisTextColor",
         "gridLineColor", "legendTextColor"
       ],
       "additionalProperties": false,
@@ -343,7 +343,6 @@
         "xAxisTextColor": { "type": "string" },
         "xAxisLineColor": { "type": "string" },
         "yAxisTextColor": { "type": "string" },
-        "yAxisLineColor": { "type": "string" },
         "gridLineColor": { "type": "string" },
         "legendTextColor": { "type": "string" }
       }

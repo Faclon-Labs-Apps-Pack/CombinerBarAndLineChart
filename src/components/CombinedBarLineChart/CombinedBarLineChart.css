@@ -31,18 +31,39 @@
   min-width: 180px;
 }
 
+/* Cap long dropdown lists — the chart-title switcher with many charts — to a
+   fixed height so they scroll instead of growing to fill the viewport. The list
+   is already an overflow-y:auto scroll container; we only add the ceiling.
+   Global (the SDK dropdown portals to document.body). */
+.fds-dropdown-menu__wrapper,
+.fds-dropdown-menu__list {
+  max-height: 280px !important;
+}
+.fds-dropdown-menu__list {
+  overflow-y: auto !important;
+}
+
 .cc-widget-shell {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* min-width:0 lets the shell shrink below its content's intrinsic width
+     (flex default min-width:auto blocks it). Without this a long chart title
+     expands the shell past the host cell, pushing the settings/export icons out
+     of view. The SDK header then truncates the title (design-sdk 0.7.31+ sets
+     min-width:0 on .fds-chart / .fds-chart__header-row and ellipsis on the
+     title-label). No overflow:hidden here — the ChartSwitcher's chart-selector
+     dropdown can render inline and would be clipped. */
+  min-width: 0;
+  /* Positioning context for the refetch loading overlay (inset: 0). */
+  position: relative;
   --cc-widget-title-font-size: 18px;
   --cc-widget-title-color: var(--text-gray-primary, #1a1a1a);
   --cc-widget-title-weight: 600;
-  /* Cap for chart/switcher titles — matches the SDK's truncated-label width. */
-  --cc-chart-title-max-width: 240px;
 }
+
 
 /* Make the ChartSwitcher (fds-chart) fill the shell instead of growing to
    its content height, so the chart fits within the parent wrapper. */
@@ -52,6 +73,43 @@
   min-height: 0;
 }
 
+/* Header title truncation — the ChartSwitcher gotcha.
+   design-sdk 0.7.31 ships a real header-overflow fix:
+     .fds-chart__header-row > :not(.fds-chart__title):not(.fds-chart-switcher__title){flex-shrink:0}
+   which keeps every header control EXCEPT the title from shrinking. But that
+   selector only matches when .fds-chart__title is the header-row's DIRECT
+   child — true only for a single-view chart. This widget always renders
+   through ChartSwitcher (multi-chart views), which wraps the title in a
+   .fds-chart__view-switcher div. THAT wrapper is the actual direct child,
+   matches neither :not() exclusion, and so gets flex-shrink:0 forced onto it —
+   re-blocking the title from shrinking and pushing the settings/export icons
+   off-screen. So we must re-enable shrinking on the wrapper ourselves.
+   flex-shrink:1 is the actual fix (min-width:0 alone does nothing while shrink
+   is blocked); min-width:0 removes the shrink floor so a nowrap title can
+   collapse below its full width. !important on both — our specificity roughly
+   ties the SDK's :not():not() selector, and a tie would fall to fragile source
+   order. Scoped to our shell + skipped when the title is hidden. */
+.cc-widget-shell:not(.cc-widget--hide-title) .fds-chart__view-switcher {
+  display: flex !important;
+  visibility: visible !important;
+  flex-shrink: 1 !important;
+  min-width: 0;
+}
+
+/* Single-chart title truncation. The populated single-chart path renders the
+   base `Chart` with a STRING title, which the SDK wraps in a Tooltip whose
+   wrapper carries BOTH `.fds-tooltip-wrapper` (display:inline-flex) and
+   `.fds-chart__title-tip`. That wrapper is the header-row's shrinkable slot, so
+   it must be a flex box that can collapse below its content — force it here
+   (mirrors the view-switcher fix above) so the inner `.fds-chart__title-label`
+   actually ellipsizes instead of the title overflowing the header. */
+.cc-widget-shell:not(.cc-widget--hide-title) .fds-chart__title-tip {
+  display: flex !important;
+  flex: 0 1 auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
 /* Wrap-Into-Card styling from the Style tab. Driven by CSS vars the widget sets
    on the shell (--cc-card-bg / -border-color / -border-width / -border-radius).
    Scoped to the populated render (not the borderless empty states). */
@@ -59,6 +117,42 @@
   background-color: var(--cc-card-bg, var(--background-surface-intense, #fff));
   border: var(--cc-card-border-width, 1px) solid var(--cc-card-border-color, var(--border-gray-muted, #e8e8e8));
   border-radius: var(--cc-card-border-radius, var(--global-border-radius-medium, 8px));
+}
+
+/* The SDK paints its own opaque white surfaces ON TOP of the card: the title
+   chip (`.fds-chart__title` hard-codes background-color: --background-surface-intense)
+   and Highcharts' own `.highcharts-background` rect (the plot area). Left alone
+   they hide the configured card background behind the title/label and the chart
+   graph. Repaint both with the card background so the whole widget — header,
+   title, plot area, axis labels — sits on one surface. Scoped to the populated
+   (non-borderless) render so empty/unconfigured states stay transparent. */
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-chart__title,
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-chart__title:hover {
+  background-color: transparent !important;
+}
+
+.cc-widget-shell:not(.cc-widget-shell--borderless) .highcharts-background {
+  fill: var(--cc-card-bg, var(--background-surface-intense, #fff)) !important;
+}
+
+/* The SDK chart viewport wraps BOTH the plot and the HTML legend strip, and it
+   hard-codes a white surface (--background-surface-intense) — that's the white
+   box behind the legend. Make it transparent so the legend sits on the card. */
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-column-chart__viewport,
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-combo-line-chart__viewport,
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-line-chart__viewport,
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-area-chart__viewport {
+  background-color: transparent !important;
+}
+
+/* Header controls carry their own white fill too: the DatePicker trigger + its
+   "Today" preset chip, and the periodicity SelectInput field. Drop the fill so
+   the card colour shows through; their borders stay, so they still read as
+   interactive controls. Scoped to the widget so no other inputs are affected. */
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-date-trigger__field,
+.cc-widget-shell:not(.cc-widget-shell--borderless) .fds-date-trigger__preset,
+.cc-widget-shell:not(.cc-widget-shell--borderless) .cc-widget__periodicity-select .fds-text-input__field {
+  background: transparent !important;
 }
 
 /* Empty "data source not configured" state: drop the Chart card's stroke. */
@@ -98,9 +192,22 @@
   display: none;
 }
 
-/* Single chart: we still render through ChartSwitcher for a consistent title,
-   but there's nothing to switch — hide the dropdown chevron and make the title
-   non-interactive so it reads as a plain heading (no dropdown). */
+/* Legend text colour (Advanced Settings → legendTextColor). The SDK renders an
+   HTML legend (`.fds-chart-legend__label` / scrollable variant), not the
+   Highcharts SVG legend, so the Highcharts legend.itemStyle we set is ignored.
+   Drive the label colour from the CSS var the widget publishes; falls back to
+   the SDK default when Advanced Settings is off (var unset). */
+.cc-widget-shell .fds-chart-legend__label,
+.cc-widget-shell .fds-chart__scrollable-legend-label {
+  color: var(--cc-widget-legend-color, var(--text-gray-secondary, #888)) !important;
+}
+
+/* `cc-widget--single-view` is applied to the EMPTY-STATE ChartSwitcher only
+   (the populated single-chart path renders the base `Chart` with a plain string
+   title, which needs no override). It hides the useless dropdown chevron and
+   makes the title non-interactive. NOTE: do NOT add this class to the populated
+   `Chart` title — its pointer-events:none would swallow the hover that triggers
+   the SDK's title-truncation Tooltip. */
 .cc-widget--single-view .fds-chart__title-icon {
   display: none !important;
 }
@@ -133,19 +240,22 @@
    the header has room. Let the label grow to fit, keep it left-aligned, and
    force the title button + wrapper to be exactly content-sized so the chevron
    sits right next to the title text instead of being pushed to the far edge. */
-/* Title is content-sized (so the chevron hugs the text) but capped at the SDK's
-   truncated-label max-width (240px); longer titles ellipsize. */
+/* Title sizes to its content and only truncates when the header genuinely runs
+   out of room: `flex: 0 1 auto` + `min-width: 0` lets it shrink (and the label
+   ellipsize) as the action icons claim space, but it grows to the full text
+   whenever there's room. No fixed max-width cap — that forced truncation even
+   with space to spare. `max-width: 100%` just keeps it inside the header row. */
 .cc-widget-shell .fds-chart-switcher__title {
   flex: 0 1 auto !important;
-  width: max-content !important;
-  max-width: var(--cc-chart-title-max-width, 240px) !important;
+  max-width: 100% !important;
   min-width: 0 !important;
   margin-right: auto !important;
 }
 .cc-widget-shell .fds-chart__title {
-  display: inline-flex !important;
-  width: max-content !important;
-  max-width: var(--cc-chart-title-max-width, 240px) !important;
+  /* Keep the SDK's own `display: flex` (an `inline-flex` override shrink-wrapped
+     the title to its text, which fought the header-row shrink and blocked the
+     label from ellipsizing on the string-title path). */
+  max-width: 100% !important;
   flex: 0 1 auto !important;
   min-width: 0 !important;
   justify-content: flex-start !important;
@@ -158,10 +268,20 @@
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
   text-align: left !important;
-  flex: 0 1 auto !important;
+  /* Do NOT override the label's flex — the SDK ships `flex: 1 1 0` on
+     `.fds-chart__title-label`, which is what makes it fill the title and
+     ellipsize. Forcing `flex: 0 1 auto` here (basis:content) re-broke
+     truncation on the single-chart string-title path (matches the reference
+     ColumnChart, which leaves the label flex untouched). */
 }
 .cc-widget-shell .fds-chart__header-row {
   justify-content: flex-start !important;
+}
+/* Keep the header action icons from shrinking so the TITLE truncates first
+   (reference ColumnChart rule). SDK already defaults to this; explicit for
+   safety against our other overrides. */
+.cc-widget-shell .fds-chart__actions {
+  flex-shrink: 0 !important;
 }
 
 /* Periodicity selector in the filters row — keep it compact next to the date
@@ -193,3 +313,32 @@
   border: none;
 }
 
+/* Refetch loading overlay — sits over the whole shell while data re-resolves
+   (time / periodicity change, compare/shift toggle, drilldown). A translucent
+   surface lets the previous chart show through faintly, reading as a refresh
+   rather than a remount. Theme-aware via the surface token. */
+.cc-widget__loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  background: color-mix(in srgb, var(--background-surface-intense, #fff) 65%, transparent);
+  border-radius: inherit;
+  /* Let clicks fall through to nothing beneath — the overlay itself blocks
+     interaction with the chart while it refreshes. */
+  cursor: progress;
+}
+
+/* "Widget not configured" first screen: show a default white surface so the
+   freshly-dropped, unconfigured widget reads as a solid card rather than a
+   transparent cut-out over the dashboard. */
+.cc-widget--unconfigured {
+  background: var(--background-surface-intense, #fff);
+}
+
+
+/* Chart-title switcher dropdown truncation is handled by the design-sdk itself
+   as of 0.7.38 (ChartViewSwitcher caps `.fds-chart__view-switcher-menu` at
+   max-width:min(320px, …)), so the earlier widget-side workaround was removed. */

@@ -486,3 +486,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Cap long dropdown lists (e.g. the chart-title picker with many charts) to a
+   fixed height so they scroll instead of growing to fill the viewport. The list
+   is already an overflow-y:auto scroll container — we only add the ceiling.
+   Global (dropdowns portal to document.body, outside .cc-config). */
+.fds-dropdown-menu__wrapper,
+.fds-dropdown-menu__list {
+  max-height: 280px !important;
+}
+.fds-dropdown-menu__list {
+  overflow-y: auto !important;
+}
+
+/* Hover target for the disabled "Chart Title" checkbox tooltip. fit-content so
+   the tooltip anchors to the checkbox itself, not the full-width group row. */
+.cc-config__disabled-check {
+  width: fit-content;
+}
