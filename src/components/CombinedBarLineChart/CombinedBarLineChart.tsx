@@ -48,6 +48,10 @@ interface CombinedBarLineChartProps {
   /** Host sets this while the engine is resolving data, to suppress the
    *  "Data not available" state until the first resolve completes. */
   loading?: boolean;
+  /** Same as `loading`, but the name the host passes while a GTP-driven
+   *  re-resolve is in flight (e.g. the linked Global Time Picker's duration
+   *  changed). Treated identically to `loading`. */
+  loader?: boolean;
   /** Host sets this when data resolution failed (network/engine error), to
    *  render the "Something went wrong" state. */
   error?: boolean | string;
@@ -1019,7 +1023,10 @@ function buildChartShift(
   };
 }
 
-export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEvent, timeConfig, loading, error }: CombinedBarLineChartProps) {
+export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEvent, timeConfig, loading: loadingProp, loader, error }: CombinedBarLineChartProps) {
+  // The host uses `loading` for its own resolves and `loader` for GTP-driven
+  // re-resolves — treat either as "loading" so the loading state shows in both.
+  const loading = !!loadingProp || !!loader;
   const chartRef = useRef<unknown>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   // True browser fullscreen via the native Fullscreen API on the widget shell —
@@ -1960,12 +1967,22 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
   // and re-resolves. So a not-yet-applied toggle leaves the current view, and once
   // applied off, `appliedCompareOn === false` drops the overlay immediately even
   // if the host still returns comparisonSlots.
-  // LOCAL picker → toggle-driven (appliedCompareOn). GTP / FIXED → the linked
-  // picker owns the mode, so follow the resolved data: comparison is on whenever
-  // the engine returned comparisonSlots (mirrors the shift data-tag detection).
+  // Comparison is DATA-DRIVEN, exactly like shift (dataHasShiftTags): render the
+  // overlay whenever the resolved data carries a comparison window
+  // (`comparisonSlots`). The engine only returns comparison slots when compare is
+  // actually on — for the LOCAL picker that means the applied Compare toggle, for
+  // GTP/FIXED it means the linked picker requested it — so the data's presence is
+  // the single reliable signal for every mode.
+  //
+  // PREVIOUSLY this ANDed `(appliedCompareOn || !isLocalPicker)`. That broke GTP:
+  // the runtime timeConfig for a GTP-linked widget doesn't reliably carry
+  // `pickerType: 'global'`, so `isLocalPicker` came back true, `!isLocalPicker`
+  // false, and (with no local toggle) `appliedCompareOn` false too — comparison
+  // silently fell back to the normal chart. Shift kept working because it never
+  // checked the picker type. Toggling Compare off on the LOCAL picker still drops
+  // the overlay: the compare-off re-resolve returns slots-free data.
   const comparisonOn =
-    data.some((d) => Array.isArray(d.comparisonSlots) && d.comparisonSlots.length > 0) &&
-    (appliedCompareOn || !isLocalPicker);
+    data.some((d) => Array.isArray(d.comparisonSlots) && d.comparisonSlots.length > 0);
   // Shift render.
   //  • LOCAL picker → toggle-driven: the widget's own Shift toggle commits
   //    `appliedShiftOn` (buildChartShift derives each bucket's shift from its
@@ -2152,8 +2169,12 @@ export function CombinedBarLineChart({ config = EMPTY_UI_CONFIG, data = [], onEv
               ),
             };
           }
-        } catch {
+        } catch (err) {
           // Comparison render failed — fall through to the normal chart below.
+          // Surfaced (not silent) so a real pipeline error is diagnosable instead
+          // of looking like "compare isn't working".
+          // eslint-disable-next-line no-console
+          console.error('[CombinedBarLineChart] comparison render failed', err);
         }
       }
 
